@@ -46,15 +46,19 @@ static int64_t nsm_sfe_rate_calc(uint64_t dval, int64_t dtime)
 	 * can instead scale the denominator down.
 	 */
 	if (scaled_dval < dval) {
-		uint64_t scaled_dtime = dtime / (NSM_SFE_PREC * NSM_US_PER_SEC);
+		uint64_t ret;
+		uint64_t scaled_dtime = dtime;
+		do_div(scaled_dtime, (NSM_SFE_PREC * NSM_US_PER_SEC));
 		if (scaled_dtime == 0) {
 			return -1;
 		}
-
-		return dval / scaled_dtime;
+		ret = dval;
+		do_div(ret, scaled_dtime);
+		return ret;
 	}
 
-	return scaled_dval / dtime;
+	do_div(scaled_dval, dtime);
+	return scaled_dval;
 }
 
 /*
