@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2022, Qualcomm Innovation Cetner, Inc. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,15 +17,19 @@
  */
 
 #include <linux/module.h>
+#include <linux/netdevice.h>
 #include <net/genetlink.h>
 #include <net/netlink.h>
 #include "exports/nsm_nl_fam.h"
 #include "nsm_sfe.h"
+#include "nsm_lat.h"
+#include "nsm_procfs.h"
 
 #define NSM_NL_OPS_CNT (NSM_NL_CMD_MAX - 1)
 
-int nsm_nl_get_stats(struct sk_buff *skb, struct genl_info *info);
-int nsm_nl_get_throughput(struct sk_buff *skb, struct genl_info *info);
+static int nsm_nl_get_latency(struct sk_buff *skb, struct genl_info *info);
+static int nsm_nl_get_stats(struct sk_buff *skb, struct genl_info *info);
+static int nsm_nl_get_throughput(struct sk_buff *skb, struct genl_info *info);
 
 /*
  * nsm_nl_pol
@@ -34,7 +38,17 @@ int nsm_nl_get_throughput(struct sk_buff *skb, struct genl_info *info);
 struct nla_policy nsm_nl_pol[NSM_NL_ATTR_MAX] = {
 	[NSM_NL_ATTR_RX_PACKETS] = { .type = NLA_U64 },
 	[NSM_NL_ATTR_RX_BYTES] = { .type = NLA_U64 },
-	[NSM_NL_ATTR_SERVICE_ID] = { .type = NLA_U8 }
+	[NSM_NL_ATTR_SERVICE_ID] = { .type = NLA_U8 },
+	[NSM_NL_ATTR_NET_DEVICE] = { .type = NLA_STRING, .len = IFNAMSIZ },
+	[NSM_NL_ATTR_LATENCY_MEAN] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_LATENCY_HIST0] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_LATENCY_HIST1] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_LATENCY_HIST2] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_LATENCY_HIST3] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_LATENCY_HIST4] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_LATENCY_HIST5] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_LATENCY_HIST6] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_LATENCY_HIST7] = { .type = NLA_U64 },
 };
 
 /*
@@ -53,7 +67,13 @@ struct genl_ops nsm_nl_ops[NSM_NL_OPS_CNT] = {
 		.flags = 0,
 		.doit = nsm_nl_get_throughput,
 		.dumpit = NULL,
-	}
+	},
+	{
+		.cmd = NSM_NL_CMD_GET_LATENCY,
+		.flags = 0,
+		.doit = nsm_nl_get_latency,
+		.dumpit = NULL,
+	},
 };
 
 /*
@@ -71,10 +91,93 @@ struct genl_family nsm_nl_fam = {
 };
 
 /*
+ * nsm_nl_get_latency()
+ *	Callback to retrieve per-service-class latency from a netdevice.
+ */
+static int nsm_nl_get_latency(struct sk_buff *skb, struct genl_info *info)
+{
+	struct sk_buff *reply;
+	struct nlattr *nla;
+	char netdev_name[IFNAMSIZ];
+	uint8_t sid;
+	uint64_t hist[NETDEV_SAWF_DELAY_BUCKETS];
+	uint64_t avg;
+	uint32_t bucket;
+	void *reply_header;
+
+
+	nla = info->attrs[NSM_NL_ATTR_NET_DEVICE];
+	if (!nla) {
+		return -1;
+	}
+
+	nla_strlcpy(netdev_name, nla, IFNAMSIZ);
+
+	nla = info->attrs[NSM_NL_ATTR_SERVICE_ID];
+	if (!nla) {
+		return -1;
+	}
+
+	sid = nla_get_u8(nla);
+	if (sid >= SFE_MAX_SERVICE_CLASS_ID) {
+		return -1;
+	}
+
+	reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!reply) {
+		return -1;
+	}
+
+	/*
+	 * Initialize reply header.
+	 */
+	reply_header = genlmsg_put(reply, info->snd_portid, info->snd_seq,
+				&nsm_nl_fam, 0, NSM_NL_CMD_GET_LATENCY);
+
+	if (!reply_header) {
+		goto error;
+	}
+
+	if (!nsm_lat_get(netdev_name, sid, hist, &avg)) {
+		goto error;
+	}
+
+	for (bucket = 0; bucket < NETDEV_SAWF_DELAY_BUCKETS; bucket++) {
+		if (nla_put_u64_64bit(reply, NSM_NL_ATTR_LATENCY_HIST0 + bucket, hist[bucket], NSM_NL_ATTR_PAD)) {
+			goto error;
+		}
+	}
+
+	if (nla_put_u64_64bit(reply, NSM_NL_ATTR_LATENCY_MEAN, avg, NSM_NL_ATTR_PAD) ||
+		nla_put_string(reply, NSM_NL_ATTR_NET_DEVICE, netdev_name) ||
+		nla_put_u8(reply, NSM_NL_ATTR_SERVICE_ID, sid)) {
+		goto error;
+	}
+
+	/*
+	 * Finalize the reply.
+	 */
+	genlmsg_end(reply, reply_header);
+
+	/*
+	 * Send the reply.
+	 */
+	if (genlmsg_unicast(genl_info_net(info), reply, info->snd_portid)) {
+		return -1;
+	}
+
+	return 0;
+
+error:
+	nlmsg_free(reply);
+	return -1;
+}
+
+/*
  * nsm_nl_get_stats
  *	Callback to get stats from a given service class.
  */
-int nsm_nl_get_stats(struct sk_buff *skb, struct genl_info *info)
+static int nsm_nl_get_stats(struct sk_buff *skb, struct genl_info *info)
 {
 	struct sk_buff *reply;
 	struct nlattr *nla;
@@ -156,7 +259,7 @@ error:
  * nsm_nl_get_throughput
  *	Callback to get throughput from a given service class.
  */
-int nsm_nl_get_throughput(struct sk_buff *skb, struct genl_info *info)
+static int nsm_nl_get_throughput(struct sk_buff *skb, struct genl_info *info)
 {
 	struct sk_buff *reply;
 	struct nlattr *nla;
@@ -238,6 +341,7 @@ error:
 void __exit nsm_nl_exit(void)
 {
 	genl_unregister_family(&nsm_nl_fam);
+	nsm_procfs_deinit();
 }
 
 /*
@@ -250,6 +354,8 @@ int __init nsm_nl_init(void)
 	if (err) {
 		printk("qca-nss-nsm: Register family failed with error %i", err);
 	}
+
+	nsm_procfs_init();
 
 	return err;
 }

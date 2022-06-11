@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2022, Qualcomm Innovation Cetner, Inc. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -19,7 +19,17 @@
 #ifndef __NSM_NL_FAM_H
 #define __NSM_NL_FAM_H
 
+/*
+ * Name of the NSM netlink family.
+ */
 #define NSM_NL_NAME "NSM_NL_FAM"
+
+/*
+ * Precision of throughput calculation. Throughputs are
+ * reported in terms of packets per NSM_NL_PREC seconds.
+ * A value of 100 means throughput is packets per 100 seconds.
+ */
+#define NSM_NL_PREC 100
 
 /*
  * nsm_nl_attr
@@ -30,6 +40,16 @@ enum nsm_nl_attr {
 	NSM_NL_ATTR_RX_PACKETS,
 	NSM_NL_ATTR_RX_BYTES,
 	NSM_NL_ATTR_SERVICE_ID,
+	NSM_NL_ATTR_NET_DEVICE,
+	NSM_NL_ATTR_LATENCY_MEAN,
+	NSM_NL_ATTR_LATENCY_HIST0,
+	NSM_NL_ATTR_LATENCY_HIST1,
+	NSM_NL_ATTR_LATENCY_HIST2,
+	NSM_NL_ATTR_LATENCY_HIST3,
+	NSM_NL_ATTR_LATENCY_HIST4,
+	NSM_NL_ATTR_LATENCY_HIST5,
+	NSM_NL_ATTR_LATENCY_HIST6,
+	NSM_NL_ATTR_LATENCY_HIST7,
 	NSM_NL_ATTR_PAD,
 	NSM_NL_ATTR_MAX
 };
@@ -42,6 +62,7 @@ enum nsm_nl_cmd {
 	NSM_NL_CMD_UNUSED,
 	NSM_NL_CMD_GET_STATS,
 	NSM_NL_CMD_GET_THROUGHPUT,
+	NSM_NL_CMD_GET_LATENCY,
 	NSM_NL_CMD_MAX
 };
 

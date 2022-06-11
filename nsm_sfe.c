@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2022, Qualcomm Innovation Cetner, Inc. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,13 +17,8 @@
  */
 
 #include "nsm_sfe.h"
+#include "exports/nsm_nl_fam.h"
 
-/*
- * Precision of throughput calculation. Throughputs are
- * reported in terms of packets per NSM_SFE_PREC seconds.
- * A value of 100 means throughput is packets per 100 seconds.
- */
-#define NSM_SFE_PREC 100
 #define NSM_US_PER_SEC 1000000
 
 static struct nsm_sfe_stats nsm_sfe_prev_stats[SFE_MAX_SERVICE_CLASS_ID];
@@ -34,7 +29,7 @@ static struct nsm_sfe_stats nsm_sfe_prev_stats[SFE_MAX_SERVICE_CLASS_ID];
  */
 static int64_t nsm_sfe_rate_calc(uint64_t dval, int64_t dtime)
 {
-	uint64_t scaled_dval = dval * NSM_SFE_PREC * NSM_US_PER_SEC;
+	uint64_t scaled_dval = dval * NSM_NL_PREC * NSM_US_PER_SEC;
 
 	if (dtime == 0) {
 		return -1;
@@ -48,7 +43,7 @@ static int64_t nsm_sfe_rate_calc(uint64_t dval, int64_t dtime)
 	if (scaled_dval < dval) {
 		uint64_t ret;
 		uint64_t scaled_dtime = dtime;
-		do_div(scaled_dtime, (NSM_SFE_PREC * NSM_US_PER_SEC));
+		do_div(scaled_dtime, (NSM_NL_PREC * NSM_US_PER_SEC));
 		if (scaled_dtime == 0) {
 			return -1;
 		}
