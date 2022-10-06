@@ -22,6 +22,7 @@
 #include <net/netlink.h>
 #include "exports/nsm_nl_fam.h"
 #include "nsm_sfe.h"
+#include "nsm_ppe.h"
 #include "nsm_lat.h"
 #include "nsm_procfs.h"
 
@@ -30,6 +31,11 @@
 static int nsm_nl_get_latency(struct sk_buff *skb, struct genl_info *info);
 static int nsm_nl_get_stats(struct sk_buff *skb, struct genl_info *info);
 static int nsm_nl_get_throughput(struct sk_buff *skb, struct genl_info *info);
+static int nsm_nl_ppe_get_service(struct sk_buff *skb, struct genl_info *info);
+static int nsm_nl_ppe_get_v4_flow(struct sk_buff *skb, struct genl_info *info);
+static int nsm_nl_ppe_get_v6_flow(struct sk_buff *skb, struct genl_info *info);
+static int nsm_nl_ppe_get_queue(struct sk_buff *skb, struct genl_info *info);
+static int nsm_nl_ppe_get_drop(struct sk_buff *skb, struct genl_info *info);
 
 /*
  * nsm_nl_pol
@@ -49,6 +55,18 @@ struct nla_policy nsm_nl_pol[NSM_NL_ATTR_MAX] = {
 	[NSM_NL_ATTR_LATENCY_HIST5] = { .type = NLA_U64 },
 	[NSM_NL_ATTR_LATENCY_HIST6] = { .type = NLA_U64 },
 	[NSM_NL_ATTR_LATENCY_HIST7] = { .type = NLA_U64 },
+	[NSM_NL_ATTR_FLOW_IP_0] = { .type = NLA_U32 },
+	[NSM_NL_ATTR_FLOW_IP_1] = { .type = NLA_U32 },
+	[NSM_NL_ATTR_FLOW_IP_2] = { .type = NLA_U32 },
+	[NSM_NL_ATTR_FLOW_IP_3] = { .type = NLA_U32 },
+	[NSM_NL_ATTR_RETURN_IP_0] = { .type = NLA_U32 },
+	[NSM_NL_ATTR_RETURN_IP_1] = { .type = NLA_U32 },
+	[NSM_NL_ATTR_RETURN_IP_2] = { .type = NLA_U32 },
+	[NSM_NL_ATTR_RETURN_IP_3] = { .type = NLA_U32 },
+	[NSM_NL_ATTR_FLOW_PORT] = { .type = NLA_U16 },
+	[NSM_NL_ATTR_RETURN_PORT] = { .type = NLA_U16 },
+	[NSM_NL_ATTR_PROTOCOL] = { .type = NLA_U8 },
+	[NSM_NL_ATTR_DROP_QUEUE_ID] = { .type = NLA_U32 },
 };
 
 /*
@@ -72,6 +90,36 @@ struct genl_ops nsm_nl_ops[NSM_NL_OPS_CNT] = {
 		.cmd = NSM_NL_CMD_GET_LATENCY,
 		.flags = 0,
 		.doit = nsm_nl_get_latency,
+		.dumpit = NULL,
+	},
+	{
+		.cmd = NSM_NL_CMD_GET_PPE_SERVICE,
+		.flags = 0,
+		.doit = nsm_nl_ppe_get_service,
+		.dumpit = NULL,
+	},
+	{
+		.cmd = NSM_NL_CMD_GET_V4_PPE_FLOW,
+		.flags = 0,
+		.doit = nsm_nl_ppe_get_v4_flow,
+		.dumpit = NULL,
+	},
+	{
+		.cmd = NSM_NL_CMD_GET_V6_PPE_FLOW,
+		.flags = 0,
+		.doit = nsm_nl_ppe_get_v6_flow,
+		.dumpit = NULL,
+	},
+	{
+		.cmd = NSM_NL_CMD_GET_PPE_QUEUE,
+		.flags = 0,
+		.doit = nsm_nl_ppe_get_queue,
+		.dumpit = NULL,
+	},
+	{
+		.cmd = NSM_NL_CMD_GET_PPE_DROP,
+		.flags = 0,
+		.doit = nsm_nl_ppe_get_drop,
 		.dumpit = NULL,
 	},
 };
@@ -104,7 +152,6 @@ static int nsm_nl_get_latency(struct sk_buff *skb, struct genl_info *info)
 	uint64_t avg;
 	uint32_t bucket;
 	void *reply_header;
-
 
 	nla = info->attrs[NSM_NL_ATTR_NET_DEVICE];
 	if (!nla) {
@@ -188,7 +235,7 @@ static int nsm_nl_get_stats(struct sk_buff *skb, struct genl_info *info)
 	/*
 	 * Start by allocating a buffer for the response so we fail early in
 	 * case of insufficient skbs.
-	 * TODO: Research whether we can put the replay in the buffer we
+	 * TODO: Research whether we can put the reply in the buffer we
 	 * received.
 	 */
 	reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
@@ -329,6 +376,498 @@ static int nsm_nl_get_throughput(struct sk_buff *skb, struct genl_info *info)
 
 	return 0;
 
+error:
+	nlmsg_free(reply);
+	return -1;
+}
+
+/*
+ * nsm_nl_ppe_get_service()
+ *	Callback to get ppe service stats
+ */
+static int nsm_nl_ppe_get_service(struct sk_buff *skb, struct genl_info *info)
+{
+	nsm_ppe_service_stat_t stats;
+	struct sk_buff *reply;
+	struct nlattr *nla;
+	uint8_t sid;
+	void *reply_header;
+
+	/*
+	 * Start by allocating a buffer for the response so we fail early in
+	 * case of insufficient skbs.
+	 * TODO: Research whether we can put the reply in the buffer we
+	 * received.
+	 */
+	reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!reply) {
+		return -1;
+	}
+
+	/*
+	 * Extract service id from info. If the service id attribute is absent,
+	 * the request is badly formed and we return an error.
+	 */
+	nla = info->attrs[NSM_NL_ATTR_SERVICE_ID];
+	if (!nla) {
+		goto error;
+	}
+	sid = nla_get_u8(nla);
+
+	/*
+	 * Fetch relevant data and store stat for throughput
+	 */
+	if (!nsm_ppe_get_service_stats(&stats, sid)) {
+		goto error;
+	}
+
+	/*
+	 * Initialize reply header.
+	 */
+	reply_header = genlmsg_put(reply, info->snd_portid, info->snd_seq,
+				&nsm_nl_fam, 0, NSM_NL_CMD_GET_PPE_SERVICE);
+	if (!reply_header) {
+		goto error;
+	}
+
+	/*
+	 * Populate reply with information.
+	 */
+	if (nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_BYTES, stats.bytes, NSM_NL_ATTR_PAD) ||
+		nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_PACKETS, stats.packets, NSM_NL_ATTR_PAD) ||
+		nla_put_u8(reply, NSM_NL_ATTR_SERVICE_ID, sid)) {
+		goto error;
+	}
+
+	/*
+	 * Finalize the reply.
+	 */
+	genlmsg_end(reply, reply_header);
+
+	/*
+	 * Send the reply. genlmsg_unicast() frees the reply on failure, so no
+	 * need to free here.
+	 */
+	if (genlmsg_unicast(genl_info_net(info), reply, info->snd_portid)) {
+		return -1;
+	}
+
+	return 0;
+error:
+	nlmsg_free(reply);
+	return -1;
+}
+
+/*
+ * nsm_nl_ppe_get_v4_flow()
+ *	Callback to get ppe flow stats
+ */
+static int nsm_nl_ppe_get_v4_flow(struct sk_buff *skb, struct genl_info *info)
+{
+	nsm_ppe_flow_stat_t stats;
+	struct ppe_drv_v4_5tuple tuple;
+	uint8_t sid;
+	struct sk_buff *reply;
+	struct nlattr *nla;
+	void *reply_header;
+
+	/*
+	 * Start by allocating a buffer for the response so we fail early in
+	 * case of insufficient skbs.
+	 * TODO: Research whether we can put the reply in the buffer we
+	 * received.
+	 */
+	reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!reply) {
+		return -1;
+	}
+
+	/*
+	 * Extract service id from info. If the service id attribute is absent,
+	 * the request is badly formed and we return an error.
+	 */
+	nla = info->attrs[NSM_NL_ATTR_SERVICE_ID];
+	if (!nla) {
+		goto error;
+	}
+	sid = nla_get_u8(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_FLOW_IP_0];
+	if (!nla) {
+		goto error;
+	}
+	tuple.flow_ip = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_FLOW_PORT];
+	if (!nla) {
+		goto error;
+	}
+	tuple.flow_ident = nla_get_u16(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_RETURN_IP_0];
+	if (!nla) {
+		goto error;
+	}
+	tuple.return_ip = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_RETURN_PORT];
+	if (!nla) {
+		goto error;
+	}
+	tuple.return_ident = nla_get_u16(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_PROTOCOL];
+	if (!nla) {
+		goto error;
+	}
+	tuple.protocol = nla_get_u8(nla);
+
+	/*
+	 * Fetch relevant data.
+	 */
+	if (!nsm_ppe_get_v4_flow_stats(&stats, &tuple)) {
+		goto error;
+	}
+
+	/*
+	 * Initialize reply header.
+	 */
+	reply_header = genlmsg_put(reply, info->snd_portid, info->snd_seq,
+				&nsm_nl_fam, 0, NSM_NL_CMD_GET_V4_PPE_FLOW);
+	if (!reply_header) {
+		goto error;
+	}
+
+	/*
+	 * Populate reply with information.
+	 */
+	if (nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_BYTES, stats.bytes, NSM_NL_ATTR_PAD) ||
+		nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_PACKETS, stats.packets, NSM_NL_ATTR_PAD) ||
+		nla_put_u8(reply, NSM_NL_ATTR_SERVICE_ID, sid)) {
+		goto error;
+	}
+
+	/*
+	 * Finalize the reply.
+	 */
+	genlmsg_end(reply, reply_header);
+
+	/*
+	 * Send the reply. genlmsg_unicast() frees the reply on failure, so no
+	 * need to free here.
+	 */
+	if (genlmsg_unicast(genl_info_net(info), reply, info->snd_portid)) {
+		return -1;
+	}
+
+	return 0;
+error:
+	nlmsg_free(reply);
+	return -1;
+}
+
+/*
+ * nsm_nl_ppe_get_v6_flow()
+ *	Callback to get ppe flow stats
+ */
+static int nsm_nl_ppe_get_v6_flow(struct sk_buff *skb, struct genl_info *info)
+{
+	nsm_ppe_flow_stat_t stats;
+	struct ppe_drv_v6_5tuple tuple;
+	uint8_t sid;
+	struct sk_buff *reply;
+	struct nlattr *nla;
+	void *reply_header;
+
+	/*
+	 * Start by allocating a buffer for the response so we fail early in
+	 * case of insufficient skbs.
+	 * TODO: Research whether we can put the reply in the buffer we
+	 * received.
+	 */
+	reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!reply) {
+		return -1;
+	}
+
+	/*
+	 * Extract service id from info. If the service id attribute is absent,
+	 * the request is badly formed and we return an error.
+	 */
+	nla = info->attrs[NSM_NL_ATTR_SERVICE_ID];
+	if (!nla) {
+		goto error;
+	}
+	sid = nla_get_u8(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_FLOW_IP_0];
+	if (!nla) {
+		goto error;
+	}
+	tuple.flow_ip[0] = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_FLOW_IP_1];
+	if (!nla) {
+		goto error;
+	}
+	tuple.flow_ip[1] = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_FLOW_IP_2];
+	if (!nla) {
+		goto error;
+	}
+	tuple.flow_ip[2] = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_FLOW_IP_3];
+	if (!nla) {
+		goto error;
+	}
+	tuple.flow_ip[3] = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_FLOW_PORT];
+	if (!nla) {
+		goto error;
+	}
+	tuple.flow_ident = nla_get_u16(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_RETURN_IP_0];
+	if (!nla) {
+		goto error;
+	}
+	tuple.return_ip[0] = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_RETURN_IP_1];
+	if (!nla) {
+		goto error;
+	}
+	tuple.return_ip[1] = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_RETURN_IP_2];
+	if (!nla) {
+		goto error;
+	}
+	tuple.return_ip[2] = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_RETURN_IP_3];
+	if (!nla) {
+		goto error;
+	}
+	tuple.return_ip[3] = nla_get_u32(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_RETURN_PORT];
+	if (!nla) {
+		goto error;
+	}
+	tuple.return_ident = nla_get_u16(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_PROTOCOL];
+	if (!nla) {
+		goto error;
+	}
+	tuple.protocol = nla_get_u8(nla);
+
+	/*
+	 * Fetch relevant data.
+	 */
+	if (!nsm_ppe_get_v6_flow_stats(&stats, &tuple)) {
+		goto error;
+	}
+
+	/*
+	 * Initialize reply header.
+	 */
+	reply_header = genlmsg_put(reply, info->snd_portid, info->snd_seq,
+				&nsm_nl_fam, 0, NSM_NL_CMD_GET_V6_PPE_FLOW);
+	if (!reply_header) {
+		goto error;
+	}
+
+	/*
+	 * Populate reply with information.
+	 */
+	if (nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_BYTES, stats.bytes, NSM_NL_ATTR_PAD) ||
+		nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_PACKETS, stats.packets, NSM_NL_ATTR_PAD) ||
+		nla_put_u8(reply, NSM_NL_ATTR_SERVICE_ID, 0)) {
+		goto error;
+	}
+
+	/*
+	 * Finalize the reply.
+	 */
+	genlmsg_end(reply, reply_header);
+
+	/*
+	 * Send the reply. genlmsg_unicast() frees the reply on failure, so no
+	 * need to free here.
+	 */
+	if (genlmsg_unicast(genl_info_net(info), reply, info->snd_portid)) {
+		return -1;
+	}
+
+	return 0;
+error:
+	nlmsg_free(reply);
+	return -1;
+}
+
+/*
+ * nsm_nl_ppe_get_queue()
+ *	Callback to get ppe per queue drop stats
+ */
+static int nsm_nl_ppe_get_queue(struct sk_buff *skb, struct genl_info *info)
+{
+	nsm_ppe_queue_drop_stat_t stats;
+	struct sk_buff *reply;
+	struct nlattr *nla;
+	uint8_t queue_index;
+	uint32_t dqi;
+	void *reply_header;
+
+	/*
+	 * Start by allocating a buffer for the response so we fail early in
+	 * case of insufficient skbs.
+	 * TODO: Research whether we can put the reply in the buffer we
+	 * received.
+	 */
+	reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!reply) {
+		return -1;
+	}
+
+	/*
+	 * Extract service id from info. If the service id attribute is absent,
+	 * the request is badly formed and we return an error.
+	 */
+	nla = info->attrs[NSM_NL_ATTR_SERVICE_ID];
+	if (!nla) {
+		goto error;
+	}
+	queue_index = nla_get_u8(nla);
+
+	nla = info->attrs[NSM_NL_ATTR_DROP_QUEUE_ID];
+	if (!nla) {
+		goto error;
+	}
+	dqi = nla_get_u32(nla);
+
+	/*
+	 * Fetch relevant data.
+	 */
+	if (!nsm_ppe_get_queue_drop_stat(&stats, queue_index, dqi)) {
+		goto error;
+	}
+
+	/*
+	 * Initialize reply header.
+	 */
+	reply_header = genlmsg_put(reply, info->snd_portid, info->snd_seq,
+				&nsm_nl_fam, 0, NSM_NL_CMD_GET_PPE_QUEUE);
+	if (!reply_header) {
+		goto error;
+	}
+
+	/*
+	 * Populate reply with information.
+	 */
+	if (nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_BYTES, stats.queue_bytes, NSM_NL_ATTR_PAD) ||
+		nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_PACKETS, stats.queue_packets, NSM_NL_ATTR_PAD) ||
+		nla_put_u8(reply, NSM_NL_ATTR_SERVICE_ID, queue_index)) {
+		goto error;
+	}
+
+	/*
+	 * Finalize the reply.
+	 */
+	genlmsg_end(reply, reply_header);
+
+	/*
+	 * Send the reply. genlmsg_unicast() frees the reply on failure, so no
+	 * need to free here.
+	 */
+	if (genlmsg_unicast(genl_info_net(info), reply, info->snd_portid)) {
+		return -1;
+	}
+
+	return 0;
+error:
+	nlmsg_free(reply);
+	return -1;
+}
+
+/*
+ * nsm_nl_ppe_get_drop()
+ *	Callback to get ppe drop stats
+ */
+static int nsm_nl_ppe_get_drop(struct sk_buff *skb, struct genl_info *info)
+{
+	nsm_ppe_drop_stat_t stats;
+	struct sk_buff *reply;
+	struct nlattr *nla;
+	uint8_t sid;
+	void *reply_header;
+
+	/*
+	 * Start by allocating a buffer for the response so we fail early in
+	 * case of insufficient skbs.
+	 * TODO: Research whether we can put the reply in the buffer we
+	 * received.
+	 */
+	reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!reply) {
+		return -1;
+	}
+
+	/*
+	 * Extract service id from info. If the service id attribute is absent,
+	 * the request is badly formed and we return an error.
+	 */
+	nla = info->attrs[NSM_NL_ATTR_SERVICE_ID];
+	if (!nla) {
+		goto error;
+	}
+	sid = nla_get_u8(nla);
+
+	/*
+	 * Fetch relevant data.
+	 * Drop stats are calculated from ppe drops and
+	 * subtracted edma drops
+	 */
+	if (!nsm_ppe_get_drop_stat(&stats, sid)) {
+		goto error;
+	}
+
+	/*
+	 * Initialize reply header.
+	 */
+	reply_header = genlmsg_put(reply, info->snd_portid, info->snd_seq,
+				&nsm_nl_fam, 0, NSM_NL_CMD_GET_PPE_DROP);
+	if (!reply_header) {
+		goto error;
+	}
+
+	/*
+	 * Populate reply with information.
+	 */
+	if (nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_BYTES, stats.total_bytes, NSM_NL_ATTR_PAD) ||
+		nla_put_u64_64bit(reply, NSM_NL_ATTR_RX_PACKETS, stats.total_packets, NSM_NL_ATTR_PAD) ||
+		nla_put_u8(reply, NSM_NL_ATTR_SERVICE_ID, sid)) {
+		goto error;
+	}
+
+	/*
+	 * Finalize the reply.
+	 */
+	genlmsg_end(reply, reply_header);
+
+	/*
+	 * Send the reply. genlmsg_unicast() frees the reply on failure, so no
+	 * need to free here.
+	 */
+	if (genlmsg_unicast(genl_info_net(info), reply, info->snd_portid)) {
+		return -1;
+	}
+
+	return 0;
 error:
 	nlmsg_free(reply);
 	return -1;
