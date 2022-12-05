@@ -21,6 +21,8 @@
 
 #include <linux/ktime.h>
 #include <linux/if_ether.h>
+#include <ppe_drv.h>
+#include <ppe_drv_sc.h>
 #include "ppe_drv_v4.h"
 #include "ppe_drv_v6.h"
 

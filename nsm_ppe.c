@@ -18,7 +18,6 @@
 
 #include "nsm_ppe.h"
 #include "exports/nsm_nl_fam.h"
-#include <ppe_drv_sc.h>
 #include <linux/netdevice.h>
 #include <nss_dp_api_if.h>
 
@@ -91,7 +90,7 @@ int nsm_ppe_get_v6_flow_stats(nsm_ppe_flow_stat_t *stats, struct ppe_drv_v6_5tup
 int nsm_ppe_get_drop_stat(nsm_ppe_drop_stat_t *stats, uint8_t service_id)
 {
 	struct ppe_drv_nsm_stats ppe_stat;
-	struct edma_nsm_sc_stats edma_stat;
+	struct nss_dp_hal_nsm_sc_stats edma_stat;
 
 	if (!ppe_drv_sc_nsm_stats_update(&ppe_stat, service_id)) {
 		printk("ppe_drv_sc_nsm_stats_update failed service_id:%d ", service_id);
@@ -99,7 +98,7 @@ int nsm_ppe_get_drop_stat(nsm_ppe_drop_stat_t *stats, uint8_t service_id)
 	}
 	printk("PPE Drop Packet:%llu Byte:%llu\n", ppe_stat.sc_stats.rx_packets, ppe_stat.sc_stats.rx_packets);
 
-	if (!edma_nsm_sc_stats_update(&edma_stat, service_id)) {
+	if (!nss_dp_nsm_sc_stats_read(&edma_stat, service_id)) {
 		printk("edma_nsm_sc_stats_update failed service_id:%d ", service_id);
 		return 0;
 	}
