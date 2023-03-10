@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -29,14 +29,14 @@ int nsm_ppe_get_service_stats(nsm_ppe_service_stat_t *stats, uint8_t service_id)
 {
 	struct ppe_drv_nsm_stats ppe_nsm_stats_temp;
 
-	if (!ppe_drv_sc_nsm_stats_update(&ppe_nsm_stats_temp, service_id)) {
-		printk("ppe_drv_sc_nsm_stats_update() failed service_id:%d", service_id);
+	if (!ppe_drv_nsm_sawf_sc_stats_read(&ppe_nsm_stats_temp, service_id)) {
+		pr_err("ppe_drv_nsm_sawf_sc_stats_read() failed service_id:%d", service_id);
 		return 0;
 	}
-	printk("PPE Service Stats Packets:%llu Bytes:%llu\n", ppe_nsm_stats_temp.sc_stats.rx_packets, ppe_nsm_stats_temp.sc_stats.rx_bytes);
+	pr_info("PPE Service Stats Packets:%llu Bytes:%llu\n", ppe_nsm_stats_temp.sawf_sc_stats.rx_packets, ppe_nsm_stats_temp.sawf_sc_stats.rx_bytes);
 
-	stats->packets = ppe_nsm_stats_temp.sc_stats.rx_packets;
-	stats->bytes = ppe_nsm_stats_temp.sc_stats.rx_bytes;
+	stats->packets = ppe_nsm_stats_temp.sawf_sc_stats.rx_packets;
+	stats->bytes = ppe_nsm_stats_temp.sawf_sc_stats.rx_bytes;
 
 	return 1;
 }
@@ -50,11 +50,11 @@ int nsm_ppe_get_v4_flow_stats(nsm_ppe_flow_stat_t *stats, struct ppe_drv_v4_5tup
 	struct ppe_drv_nsm_stats nsm_stats;
 
 	if(!ppe_drv_v4_nsm_stats_update(&nsm_stats, tuple)) {
-		printk("nsm_ppe: Bad ipv4 flow stat lookup %pI4h:%d %pI4h:%d %d\n",
+		pr_err("nsm_ppe: Bad ipv4 flow stat lookup %pI4h:%d %pI4h:%d %d\n",
 			&tuple->flow_ip, tuple->flow_ident, &tuple->return_ip, tuple->return_ident, tuple->protocol);
 		return 0;
 	}
-	printk("Flow_Stats Match Found: Packets:%llu Bytes:%llu", nsm_stats.flow_stats.rx_packets, nsm_stats.flow_stats.rx_bytes);
+	pr_info("Flow_Stats Match Found: Packets:%llu Bytes:%llu", nsm_stats.flow_stats.rx_packets, nsm_stats.flow_stats.rx_bytes);
 
 	stats->packets = nsm_stats.flow_stats.rx_packets;
 	stats->bytes = nsm_stats.flow_stats.rx_bytes;
@@ -71,11 +71,11 @@ int nsm_ppe_get_v6_flow_stats(nsm_ppe_flow_stat_t *stats, struct ppe_drv_v6_5tup
 	struct ppe_drv_nsm_stats nsm_stats;
 
 	if(!ppe_drv_v6_nsm_stats_update(&nsm_stats, tuple)) {
-		printk("nsm_ppe: Bad ipv6 flow stat lookup %pI6:%d %pI6:%d %d\n",
+		pr_err("nsm_ppe: Bad ipv6 flow stat lookup %pI6:%d %pI6:%d %d\n",
 			&tuple->flow_ip[0], tuple->flow_ident, &tuple->return_ip[0],tuple->return_ident, tuple->protocol);
 		return 0;
 	}
-	printk("Flow_Stats Match Found: Packets:%llu Bytes:%llu", nsm_stats.flow_stats.rx_packets, nsm_stats.flow_stats.rx_bytes);
+	pr_info("Flow_Stats Match Found: Packets:%llu Bytes:%llu", nsm_stats.flow_stats.rx_packets, nsm_stats.flow_stats.rx_bytes);
 
 	stats->packets = nsm_stats.flow_stats.rx_packets;
 	stats->bytes = nsm_stats.flow_stats.rx_bytes;
@@ -90,22 +90,30 @@ int nsm_ppe_get_v6_flow_stats(nsm_ppe_flow_stat_t *stats, struct ppe_drv_v6_5tup
 int nsm_ppe_get_drop_stat(nsm_ppe_drop_stat_t *stats, uint8_t service_id)
 {
 	struct ppe_drv_nsm_stats ppe_stat;
-	struct nss_dp_hal_nsm_sc_stats edma_stat;
+	struct nss_dp_hal_nsm_sawf_sc_stats edma_stat;
 
-	if (!ppe_drv_sc_nsm_stats_update(&ppe_stat, service_id)) {
-		printk("ppe_drv_sc_nsm_stats_update failed service_id:%d ", service_id);
+	if (!ppe_drv_nsm_sawf_sc_stats_read(&ppe_stat, service_id)) {
+		pr_err("ppe_drv_nsm_sawf_sc_stats_read failed service_id:%d ", service_id);
 		return 0;
 	}
-	printk("PPE Drop Packet:%llu Byte:%llu\n", ppe_stat.sc_stats.rx_packets, ppe_stat.sc_stats.rx_packets);
+	pr_info("PPE Drop Packet:%llu Byte:%llu\n", ppe_stat.sawf_sc_stats.rx_packets, ppe_stat.sawf_sc_stats.rx_bytes);
 
-	if (!nss_dp_nsm_sc_stats_read(&edma_stat, service_id)) {
-		printk("edma_nsm_sc_stats_update failed service_id:%d ", service_id);
+	if (!nss_dp_nsm_sawf_sc_stats_read(&edma_stat, service_id)) {
+		pr_err("nss_dp_nsm_sawf_sc_stats_read failed service_id:%d ", service_id);
 		return 0;
 	}
-	printk("EDMA Drop Packet:%llu Byte:%llu\n", edma_stat.rx_packets, edma_stat.rx_packets);
+	pr_info("EDMA Drop Packet:%llu Byte:%llu\n", edma_stat.rx_packets, edma_stat.rx_bytes);
 
-	stats->total_packets = ppe_stat.sc_stats.rx_packets - edma_stat.rx_packets;
-	stats->total_bytes = ppe_stat.sc_stats.rx_bytes - edma_stat.rx_bytes;
+	/*
+	 * Reset counter to prevent roll over
+	 */
+	if (ppe_stat.sawf_sc_stats.rx_packets < edma_stat.rx_packets) {
+		stats->total_packets = 0;
+		stats->total_bytes = 0;
+	} else {
+		stats->total_packets = ppe_stat.sawf_sc_stats.rx_packets - edma_stat.rx_packets;
+		stats->total_bytes = ppe_stat.sawf_sc_stats.rx_bytes - edma_stat.rx_bytes;
+	}
 
 	return 1;
 }
@@ -122,10 +130,10 @@ int nsm_ppe_get_queue_drop_stat(nsm_ppe_queue_drop_stat_t *stats, uint32_t queue
 	struct ppe_drv_nsm_stats ppe_nsm_stats_temp;
 
 	if(!ppe_drv_nsm_queue_stats_update(&ppe_nsm_stats_temp, queue_index, drop_queue_id)) {
-			printk("ppe_drv_nsm_queue_stats_update failed queue_index:%d drop_queue_id:%d\n", queue_index, drop_queue_id);
+			pr_err("ppe_drv_nsm_queue_stats_update failed queue_index:%d drop_queue_id:%d\n", queue_index, drop_queue_id);
 		return 0;
 	}
-	printk("Queue Drop Packet:%llu Byte:%llu", ppe_nsm_stats_temp.queue_stats.drop_packets, ppe_nsm_stats_temp.queue_stats.drop_bytes);
+	pr_info("Queue Drop Packet:%llu Byte:%llu", ppe_nsm_stats_temp.queue_stats.drop_packets, ppe_nsm_stats_temp.queue_stats.drop_bytes);
 
 	/*
 	 * This is safe to do since the packets will never be zero
