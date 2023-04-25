@@ -262,12 +262,16 @@ void fls_conn_create(uint8_t ip_version,
 	struct fls_conn *reply;
 	orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
 	if (!orig) {
+		*orig_conn = NULL;
+		*repl_conn = NULL;
 		return;
 	}
 
 	reply = fls_conn_create_flow(ip_version, protocol, ret_src_ip, ret_src_port, ret_dest_ip, ret_dest_port);
 	if (!reply) {
 		fls_conn_delete(orig);
+		*orig_conn = NULL;
+		*repl_conn = NULL;
 		return;
 	}
 
