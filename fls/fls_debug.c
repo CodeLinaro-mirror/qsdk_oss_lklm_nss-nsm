@@ -175,7 +175,7 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 	fls_conn_ipv4_sprint(conn->dest_ip[0], ipaddr_str, 16);
 	printk("%p orig_dst = %s:%hu\n", conn, ipaddr_str, ntohs(conn->dest_port));
 	for (i = 1; i < 4; i++) {
-		if (conn->src_ip[i]) {
+		if (conn->dest_ip[i]) {
 			printk("%p orig_dst[%u] = %x", conn, i, conn->dest_ip[i]);
 		}
 	}
