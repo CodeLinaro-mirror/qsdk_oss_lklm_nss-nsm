@@ -34,6 +34,8 @@ uint32_t fls_def_sensor_bytes;
 uint32_t fls_def_sensor_ipat;
 bool fls_def_sensor_dynamic_samples;
 static struct fls_event event;
+uint32_t fls_def_sensor_pkts_hwm;
+uint32_t fls_def_sensor_bytes_hwm;
 
 static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
 {
@@ -230,6 +232,18 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		 * If the time is past the end of the current sample, we need to start a new sample.
 		 */
 		if (sample_diff >= sample_length) {
+			/*
+			 * Check if sample exceeds watermark
+			 */
+			sample = &(conn->stats.isd.samples[sample_index]);
+			if ((fls_def_sensor_pkts_hwm && sample->packets >= fls_def_sensor_pkts_hwm) || (fls_def_sensor_bytes_hwm && sample->bytes >= fls_def_sensor_bytes_hwm)) {
+				FLS_INFO("%p HWM exceeded. pkts=%u pkt_hwm=%u, bytes=%u bytes_hwm=%u", conn, sample->packets, fls_def_sensor_pkts_hwm, sample->bytes, fls_def_sensor_bytes_hwm);
+				conn->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
+				if (conn->reverse) {
+					conn->reverse->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
+				}
+			}
+
 			sample_index += 1;
 			FLS_TRACE("%p increased sample_index to %u", conn, sample_index);
 			if (sample_index < fls_def_sensor_sample_count) {
@@ -331,5 +345,7 @@ bool fls_def_sensor_init(struct fls_sensor_manager *fsm)
 	fls_def_sensor_sample_count = FLS_DEF_SENSOR_MAX_SAMPLE_COUNT;
 	fls_def_sensor_bytes = 1;
 	fls_def_sensor_ipat = 1;
+	fls_def_sensor_bytes_hwm = 0;
+	fls_def_sensor_pkts_hwm = 0;
 	return fls_sensor_manager_register(fsm, fls_def_sensor_packet_cb, NULL);
 }
