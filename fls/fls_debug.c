@@ -89,6 +89,20 @@ static struct ctl_table fls_debug_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_douintvec_minmax,
 	},
+	{
+		.procname	= "pkts_hwm",
+		.data		= &fls_def_sensor_pkts_hwm,
+		.maxlen		= sizeof(fls_def_sensor_pkts_hwm),
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec,
+	},
+	{
+		.procname	= "bytes_hwm",
+		.data		= &fls_def_sensor_bytes_hwm,
+		.maxlen		= sizeof(fls_def_sensor_bytes_hwm),
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec,
+	},
 	{ }
 };
 

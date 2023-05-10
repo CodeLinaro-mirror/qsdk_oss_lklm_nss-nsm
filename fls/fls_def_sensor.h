@@ -33,6 +33,8 @@ extern int32_t fls_def_sensor_max_events;
 extern uint32_t fls_def_sensor_sample_count;
 extern uint32_t fls_def_sensor_bytes;
 extern uint32_t fls_def_sensor_ipat;
+extern uint32_t fls_def_sensor_pkts_hwm;
+extern uint32_t fls_def_sensor_bytes_hwm;
 
 struct fls_def_sensor_sample {
 	uint64_t packets;
