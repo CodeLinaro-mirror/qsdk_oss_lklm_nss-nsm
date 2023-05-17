@@ -145,9 +145,12 @@ static inline struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 	return connection;
 }
 
-void fls_conn_stats_update(void *connection, struct sk_buff *skb)
+bool fls_conn_stats_update(void *connection, struct sk_buff *skb)
 {
-	fls_sensor_manager_call_all(&fct.fsm, (struct fls_conn *)connection, skb);
+	struct fls_conn *conn = (struct fls_conn *)connection;
+
+	fls_sensor_manager_call_all(&fct.fsm, conn, skb);
+	return conn->flags & FLS_CONNECTION_FLAG_ENABLE_MASK;
 }
 EXPORT_SYMBOL(fls_conn_stats_update);
 
