@@ -36,7 +36,6 @@ struct fls_event_log {
 	spinlock_t write_lock;
 };
 
-
 struct fls_chardev {
 	struct cdev cdev;
 	struct class *cl;
@@ -47,6 +46,7 @@ struct fls_chardev {
 static struct fls_chardev chardev;
 
 static struct fls_event_log event_log;
+static struct fls_event temp;
 
 static int fls_chardev_fopen(struct inode *inode, struct file *file)
 {
@@ -56,7 +56,6 @@ static int fls_chardev_fopen(struct inode *inode, struct file *file)
 static ssize_t fls_chardev_fread(struct file *file, char *buffer, size_t length, loff_t *offset)
 {
 	unsigned long irqflags;
-	struct fls_event temp;
 
 	/*
 	 * Copy full event structure, including all (up to 20) samples into *buffer.
