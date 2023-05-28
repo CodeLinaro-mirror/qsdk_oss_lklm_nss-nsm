@@ -33,11 +33,11 @@ uint32_t fls_def_sensor_sample_count;
 uint32_t fls_def_sensor_bytes;
 uint32_t fls_def_sensor_ipat;
 bool fls_def_sensor_dynamic_samples;
+static struct fls_event event;
 
 static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
 {
 	uint32_t i;
-	struct fls_event event;
 	struct fls_conn *orig;
 	struct fls_conn *reverse;
 
