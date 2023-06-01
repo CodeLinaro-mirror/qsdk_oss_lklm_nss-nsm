@@ -185,7 +185,7 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 	}
 
 	if (!(conn->flags & FLS_CONNECTION_FLAG_DEF_ENABLE)) {
-		FLS_WARN("%p Statistics disabled.\n", conn);
+		FLS_TRACE("%p Statistics disabled.\n", conn);
 		return;
 	}
 
