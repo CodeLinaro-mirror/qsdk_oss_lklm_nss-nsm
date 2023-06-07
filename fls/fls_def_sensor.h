@@ -35,17 +35,35 @@ extern uint32_t fls_def_sensor_bytes;
 extern uint32_t fls_def_sensor_ipat;
 extern uint32_t fls_def_sensor_pkts_hwm;
 extern uint32_t fls_def_sensor_bytes_hwm;
+extern uint32_t fls_def_sensor_burst;
+extern uint32_t fls_def_sensor_burst_threshold;
+extern uint32_t fls_def_sensor_burst_short_intvl;
+extern uint32_t fls_def_sensor_burst_long_intvl;
+struct fls_def_sensor_burst {
+	bool active;
+	uint32_t sz;
+	ktime_t start;
+	ktime_t last;
+};
 
 struct fls_def_sensor_sample {
-	uint64_t packets;
-	uint64_t bytes;
-	uint64_t bytes_min;
-	uint64_t bytes_max;
+	uint32_t packets;
+	uint32_t bytes;
+	uint32_t bytes_min;
+	uint32_t bytes_max;
 	uint64_t delta_sum;
 	uint64_t delta_min;
 	uint64_t delta_max;
+	uint32_t bursts;
+	uint32_t burst_sz_sum;
+	uint32_t burst_sz_min;
+	uint32_t burst_sz_max;
+	uint64_t burst_dur_sum;
+	uint64_t burst_dur_min;
+	uint64_t burst_dur_max;
 	ktime_t last_packet_time;
 	ktime_t sample_start_time;
+	struct fls_def_sensor_burst burst_data;
 };
 
 struct fls_def_sensor_data {

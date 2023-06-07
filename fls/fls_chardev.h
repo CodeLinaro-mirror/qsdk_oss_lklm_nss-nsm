@@ -31,21 +31,35 @@ enum fls_chardev_event_types {
 
 struct fls_def_event_sample
 {
-	uint64_t orig_packets;
-	uint64_t orig_bytes;
-	uint64_t orig_bytes_min;
-	uint64_t orig_bytes_max;
+	uint32_t orig_packets;
+	uint32_t orig_bytes;
+	uint32_t orig_bytes_min;
+	uint32_t orig_bytes_max;
 	uint64_t orig_delta_sum;
 	uint64_t orig_delta_min;
 	uint64_t orig_delta_max;
+	uint32_t orig_bursts;
+	uint32_t orig_burst_sz_sum;
+	uint32_t orig_burst_sz_min;
+	uint32_t orig_burst_sz_max;
+	uint64_t orig_burst_dur_sum;
+	uint64_t orig_burst_dur_min;
+	uint64_t orig_burst_dur_max;
 
-	uint64_t ret_packets;
-	uint64_t ret_bytes;
-	uint64_t ret_bytes_min;
-	uint64_t ret_bytes_max;
+	uint32_t ret_packets;
+	uint32_t ret_bytes;
+	uint32_t ret_bytes_min;
+	uint32_t ret_bytes_max;
 	uint64_t ret_delta_sum;
 	uint64_t ret_delta_min;
 	uint64_t ret_delta_max;
+	uint32_t ret_bursts;
+	uint32_t ret_burst_sz_sum;
+	uint32_t ret_burst_sz_min;
+	uint32_t ret_burst_sz_max;
+	uint64_t ret_burst_dur_sum;
+	uint64_t ret_burst_dur_min;
+	uint64_t ret_burst_dur_max;
 };
 
 struct fls_def_event {

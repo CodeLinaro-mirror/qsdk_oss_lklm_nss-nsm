@@ -32,6 +32,10 @@ int32_t fls_def_sensor_max_events;
 uint32_t fls_def_sensor_sample_count;
 uint32_t fls_def_sensor_bytes;
 uint32_t fls_def_sensor_ipat;
+uint32_t fls_def_sensor_burst;
+uint32_t fls_def_sensor_burst_threshold;
+uint32_t fls_def_sensor_burst_short_intvl;
+uint32_t fls_def_sensor_burst_long_intvl;
 bool fls_def_sensor_dynamic_samples;
 static struct fls_event event;
 uint32_t fls_def_sensor_pkts_hwm;
@@ -96,6 +100,13 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
 		event.def_event.samples[i].orig_delta_sum = orig->stats.isd.samples[i].delta_sum;
 		event.def_event.samples[i].orig_delta_min = orig->stats.isd.samples[i].delta_min;
 		event.def_event.samples[i].orig_delta_max = orig->stats.isd.samples[i].delta_max;
+		event.def_event.samples[i].orig_bursts = orig->stats.isd.samples[i].bursts;
+		event.def_event.samples[i].orig_burst_sz_sum = orig->stats.isd.samples[i].burst_sz_sum;
+		event.def_event.samples[i].orig_burst_sz_min = orig->stats.isd.samples[i].burst_sz_min;
+		event.def_event.samples[i].orig_burst_sz_max = orig->stats.isd.samples[i].burst_sz_max;
+		event.def_event.samples[i].orig_burst_dur_sum = orig->stats.isd.samples[i].burst_dur_sum;
+		event.def_event.samples[i].orig_burst_dur_min = orig->stats.isd.samples[i].burst_dur_min;
+		event.def_event.samples[i].orig_burst_dur_max = orig->stats.isd.samples[i].burst_dur_max;
 
 		orig->stats.isd.samples[i].packets = 0;
 		orig->stats.isd.samples[i].bytes = 0;
@@ -105,6 +116,13 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
 		orig->stats.isd.samples[i].delta_min = 0;
 		orig->stats.isd.samples[i].delta_max = 0;
 		orig->stats.isd.samples[i].last_packet_time = 0;
+		orig->stats.isd.samples[i].bursts = 0;
+		orig->stats.isd.samples[i].burst_sz_sum = 0;
+		orig->stats.isd.samples[i].burst_sz_min = 0;
+		orig->stats.isd.samples[i].burst_sz_max = 0;
+		orig->stats.isd.samples[i].burst_dur_sum = 0;
+		orig->stats.isd.samples[i].burst_dur_min = 0;
+		orig->stats.isd.samples[i].burst_dur_max = 0;
 
 		event.def_event.samples[i].ret_packets = reverse->stats.isd.samples[i].packets;
 		event.def_event.samples[i].ret_bytes = reverse->stats.isd.samples[i].bytes;
@@ -113,6 +131,14 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
 		event.def_event.samples[i].ret_delta_sum = reverse->stats.isd.samples[i].delta_sum;
 		event.def_event.samples[i].ret_delta_min = reverse->stats.isd.samples[i].delta_min;
 		event.def_event.samples[i].ret_delta_max = reverse->stats.isd.samples[i].delta_max;
+		event.def_event.samples[i].ret_bursts = reverse->stats.isd.samples[i].bursts;
+		event.def_event.samples[i].ret_burst_sz_sum = reverse->stats.isd.samples[i].burst_sz_sum;
+		event.def_event.samples[i].ret_burst_sz_min = reverse->stats.isd.samples[i].burst_sz_min;
+		event.def_event.samples[i].ret_burst_sz_max = reverse->stats.isd.samples[i].burst_sz_max;
+		event.def_event.samples[i].ret_burst_dur_sum = reverse->stats.isd.samples[i].burst_dur_sum;
+		event.def_event.samples[i].ret_burst_dur_min = reverse->stats.isd.samples[i].burst_dur_min;
+		event.def_event.samples[i].ret_burst_dur_max = reverse->stats.isd.samples[i].burst_dur_max;
+
 
 		reverse->stats.isd.samples[i].packets = 0;
 		reverse->stats.isd.samples[i].bytes = 0;
@@ -122,6 +148,14 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
 		reverse->stats.isd.samples[i].delta_min = 0;
 		reverse->stats.isd.samples[i].delta_max = 0;
 		reverse->stats.isd.samples[i].last_packet_time = 0;
+		reverse->stats.isd.samples[i].bursts = 0;
+		reverse->stats.isd.samples[i].burst_sz_sum = 0;
+		reverse->stats.isd.samples[i].burst_sz_min = 0;
+		reverse->stats.isd.samples[i].burst_sz_max = 0;
+		reverse->stats.isd.samples[i].burst_dur_sum = 0;
+		reverse->stats.isd.samples[i].burst_dur_min = 0;
+		reverse->stats.isd.samples[i].burst_dur_max = 0;
+
 	}
 
 	if (!fls_chardev_enqueue(&event)) {
@@ -143,6 +177,95 @@ static void fls_def_sensor_bytes_record(struct fls_def_sensor_sample *sample, ui
 		sample->bytes_min = bytes;
 	} else if (bytes > sample->bytes_max) {
 		sample->bytes_max = bytes;
+	}
+}
+
+static void fls_def_sensor_burst_open(struct fls_def_sensor_sample *sample, ktime_t now, uint32_t bytes) {
+	sample->burst_data.start = now;
+	sample->burst_data.last = now;
+	sample->burst_data.sz = bytes;
+	if (bytes > fls_def_sensor_burst_threshold) {
+		sample->burst_data.active = true;
+	} else {
+		sample->burst_data.active = false;
+	}
+}
+
+static void fls_def_sensor_burst_close(struct fls_def_sensor_sample *sample)
+{
+	ktime_t dur;
+
+	if (!sample->burst_data.active) {
+		memset(&(sample->burst_data), 0, sizeof(sample->burst_data));
+		return;
+	}
+
+	dur = ktime_sub(sample->burst_data.last, sample->burst_data.start);
+
+	if (sample->bursts == 0) {
+		sample->burst_dur_sum = dur;
+		sample->burst_dur_min = dur;
+		sample->burst_dur_max = dur;
+
+		sample->burst_sz_sum = sample->burst_data.sz;
+		sample->burst_sz_min = sample->burst_data.sz;
+		sample->burst_sz_max = sample->burst_data.sz;
+
+		sample->bursts++;
+		return;
+	}
+
+	sample->bursts++;
+
+	sample->burst_dur_sum += dur;
+	if (dur < sample->burst_dur_min) {
+		sample->burst_dur_min = dur;
+	} else if (dur > sample->burst_dur_max) {
+		sample->burst_dur_max = dur;
+	}
+
+	sample->burst_sz_sum += sample->burst_data.sz;
+	if (sample->burst_data.sz < sample->burst_sz_min) {
+		sample->burst_sz_min = sample->burst_data.sz;
+	} else if (sample->burst_data.sz > sample->burst_sz_max) {
+		sample->burst_sz_max = sample->burst_data.sz;
+	}
+
+	memset(&(sample->burst_data), 0, sizeof(sample->burst_data));
+}
+
+static void fls_def_sensor_burst_record(struct fls_def_sensor_sample *sample, ktime_t now, uint32_t bytes)
+{
+	ktime_t delta;
+
+	if (!sample->burst_data.start) {
+		fls_def_sensor_burst_open(sample, now, bytes);
+		return;
+	}
+
+	if (sample->burst_data.active) {
+		delta = ktime_sub(now, sample->burst_data.last);
+		if (delta >= fls_def_sensor_burst_long_intvl) {
+			fls_def_sensor_burst_close(sample);
+			fls_def_sensor_burst_open(sample, now, bytes);
+			return;
+		}
+
+		sample->burst_data.sz += bytes;
+		sample->burst_data.last = now;
+		return;
+	}
+
+	delta = ktime_sub(now, sample->burst_data.start);
+	if (delta >= fls_def_sensor_burst_short_intvl) {
+		fls_def_sensor_burst_open(sample, now, bytes);
+		return;
+	}
+
+	sample->burst_data.sz += bytes;
+	sample->burst_data.last = now;
+	if (sample->burst_data.sz > fls_def_sensor_burst_threshold) {
+		sample->burst_data.active = true;
 	}
 }
 
@@ -242,6 +365,8 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 				if (conn->reverse) {
 					conn->reverse->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
 				}
+			if (fls_def_sensor_burst) {
+				fls_def_sensor_burst_close(&conn->stats.isd.samples[sample_index]);
 			}
 
 			sample_index += 1;
@@ -256,6 +381,10 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 	} else {
 		int32_t event_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.event_start_time));
 		sample_index = event_diff / sample_length;
+
+		if (fls_def_sensor_burst && sample_index > conn->stats.isd.sample_index) {
+			fls_def_sensor_burst_close(&conn->stats.isd.samples[conn->stats.isd.sample_index]);
+		}
 	}
 
 	/*
@@ -329,6 +458,9 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 	}
 	if (fls_def_sensor_ipat) {
 		fls_def_sensor_ipat_record(sample, now);
+	}
+	if (fls_def_sensor_burst) {
+		fls_def_sensor_burst_record(sample, now, skb->len);
 	}
 
 	sample->packets++;
