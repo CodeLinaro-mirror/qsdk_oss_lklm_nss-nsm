@@ -59,7 +59,7 @@ static inline bool fls_conn_matches(struct fls_conn *connection,
 		if (connection->src_ip[0] != src_ip[0] ||
 			connection->src_ip[1] != src_ip[1] ||
 			connection->src_ip[2] != src_ip[2] ||
-			connection->src_ip[4] != src_ip[3] ||
+			connection->src_ip[3] != src_ip[3] ||
 			connection->dest_ip[0] != dest_ip[0] ||
 			connection->dest_ip[1] != dest_ip[1] ||
 			connection->dest_ip[2] != dest_ip[2] ||
