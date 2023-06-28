@@ -56,11 +56,11 @@ static struct ctl_table fls_debug_table[] = {
 		.proc_handler	= &proc_dointvec,
 	},
 	{
-		.procname	= "sample_window",
-		.data		= &fls_def_sensor_sample_length,
-		.maxlen		= sizeof(fls_def_sensor_sample_length),
+		.procname	= "window_sz",
+		.data		= fls_def_sensor_window_sz,
+		.maxlen		= sizeof(fls_def_sensor_window_sz),
 		.mode		= 0644,
-		.proc_handler	= &proc_douintvec,
+		.proc_handler	= &proc_dointvec,
 	},
 	{
 		.procname	= "sample_count",
@@ -114,24 +114,24 @@ static struct ctl_table fls_debug_table[] = {
 	},
 	{
 		.procname	= "burst_thresh",
-		.data		= &fls_def_sensor_burst_threshold,
+		.data		= fls_def_sensor_burst_threshold,
 		.maxlen		= sizeof(fls_def_sensor_burst_threshold),
 		.mode		= 0644,
-		.proc_handler	= &proc_douintvec,
+		.proc_handler	= &proc_dointvec,
 	},
 	{
 		.procname	= "burst_short_intvl",
-		.data		= &fls_def_sensor_burst_short_intvl,
+		.data		= fls_def_sensor_burst_short_intvl,
 		.maxlen		= sizeof(fls_def_sensor_burst_short_intvl),
 		.mode		= 0644,
-		.proc_handler	= &proc_douintvec,
+		.proc_handler	= &proc_dointvec,
 	},
 	{
 		.procname	= "burst_long_intvl",
-		.data		= &fls_def_sensor_burst_long_intvl,
+		.data		= fls_def_sensor_burst_long_intvl,
 		.maxlen		= sizeof(fls_def_sensor_burst_long_intvl),
 		.mode		= 0644,
-		.proc_handler	= &proc_douintvec,
+		.proc_handler	= &proc_dointvec
 	},
 	{ }
 };
