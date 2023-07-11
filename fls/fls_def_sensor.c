@@ -240,7 +240,7 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 			}
 		}
 	} else {
-		int64_t event_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.event_start_time));
+		int32_t event_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.event_start_time));
 		sample_index = event_diff / sample_length;
 	}
 
@@ -248,7 +248,7 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 	 * If we've already generated enough samples, it's time to create a new event
 	 */
 	if (sample_index >= fls_def_sensor_sample_count) {
-		int64_t abs_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.first_packet_time));
+		int32_t abs_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.first_packet_time));
 		uint32_t event_count;
 		ktime_t event_start_new;
 
