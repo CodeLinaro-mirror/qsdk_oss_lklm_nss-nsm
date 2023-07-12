@@ -20,7 +20,7 @@
 #include <linux/net.h>
 #include "fls_debug.h"
 
-#define FLS_DEBUG_LEVEL_DEFAULT FLS_DEBUG_LEVEL_WARN
+#define FLS_DEBUG_LEVEL_DEFAULT FLS_DEBUG_LEVEL_ERROR
 
 static uint32_t fls_debug_level_current;
 static uint32_t fls_debug_level_min = FLS_DEBUG_LEVEL_NONE;
