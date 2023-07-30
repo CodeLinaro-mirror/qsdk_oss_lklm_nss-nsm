@@ -308,8 +308,6 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		conn->reverse->stats.isd.sample_index = sample_index;
 	}
 
-	FLS_TRACE("%p recording default sensor data at sample index %u", conn, sample_index);
-
 	sample = &(conn->stats.isd.samples[sample_index]);
 
 	if (fls_def_sensor_bytes) {

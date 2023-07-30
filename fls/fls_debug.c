@@ -121,9 +121,9 @@ static int fls_conn_ipv4_sprint(uint32_t addr, char *str, size_t len)
 
 void fls_debug_print(uint32_t level, char *fmt, ...) {
 	va_list args;
-	va_start(args, fmt);
 
 	if (level <= fls_debug_level_current) {
+		va_start(args, fmt);
 		vprintk(fmt, args);
 	}
 }
