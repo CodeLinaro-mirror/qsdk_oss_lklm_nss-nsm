@@ -73,7 +73,7 @@ struct fls_conn_tracker {
 
 extern struct fls_conn_tracker fct;
 
-extern void fls_conn_stats_update(void *connection, struct sk_buff *skb);
+extern bool fls_conn_stats_update(void *connection, struct sk_buff *skb);
 extern struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 											uint8_t protocol,
 											uint32_t *src_ip,
