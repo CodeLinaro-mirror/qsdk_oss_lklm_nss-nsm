@@ -52,12 +52,14 @@ struct fls_conn {
 	uint16_t dest_port;
 	uint32_t hash;
 	uint32_t flags;
+	bool externalrule;
 	struct fls_conn *reverse;
 	struct fls_conn *hash_next;
 	struct fls_conn *hash_prev;
 	struct fls_conn *all_next;
 	struct fls_conn *all_prev;
 	struct fls_conn_stats stats;
+	s64 last_ts;	/*last packet arrival*/
 };
 
 struct fls_conn_tracker {
@@ -72,6 +74,7 @@ struct fls_conn_tracker {
 };
 
 extern struct fls_conn_tracker fct;
+extern s64 fls_conn_timeout;
 
 extern bool fls_conn_stats_update(void *connection, struct sk_buff *skb);
 extern struct fls_conn *fls_conn_lookup(uint8_t ip_version,
@@ -80,7 +83,25 @@ extern struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 											uint16_t src_port,
 											uint32_t *dest_ip,
 											uint16_t dest_port);
+void fls_conn_delete_internal(void *conn);
 void fls_conn_delete(void *conn);
+
+struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
+											uint8_t protocol,
+											uint32_t *src_ip,
+											uint16_t src_port,
+											uint32_t *dest_ip,
+											uint16_t dest_port);
+struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
+										uint8_t protocol,
+										uint32_t *orig_src_ip,
+										uint16_t orig_src_port,
+										uint32_t *orig_dest_ip,
+										uint16_t orig_dest_port,
+										uint32_t *ret_src_ip,
+										uint16_t ret_src_port,
+										uint32_t *ret_dest_ip,
+										uint16_t ret_dest_port, bool isexternal, s64 last_ts);
 extern void fls_conn_create(uint8_t ip_version,
 										uint8_t protocol,
 										uint32_t *orig_src_ip,
@@ -94,4 +115,5 @@ extern void fls_conn_create(uint8_t ip_version,
 										void **orig_conn,
 										void **repl_conn);
 void fls_conn_tracker_init(void);
+void fls_conn_flush(void);
 #endif

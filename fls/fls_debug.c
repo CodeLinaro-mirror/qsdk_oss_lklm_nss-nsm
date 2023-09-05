@@ -133,6 +133,13 @@ static struct ctl_table fls_debug_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec
 	},
+	{
+		.procname	= "conn_timeout",
+		.data		= &fls_conn_timeout,
+		.maxlen		= sizeof(fls_conn_timeout),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec
+	},
 	{ }
 };
 

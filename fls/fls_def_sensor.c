@@ -341,7 +341,11 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		return;
 	}
 
-	now = ktime_get_boottime();
+	if(conn->externalrule) {
+		now = skb->tstamp;
+	} else {
+		now = ktime_get_boottime();
+	}
 	if (!conn->stats.isd.first_packet_time) {
 		FLS_INFO("%p First packet. t = %lld", conn, now);
 		fls_debug_print_conn_info(conn);
@@ -398,7 +402,6 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 
 	sample_index = conn->stats.isd.sample_index;
 	sample_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.samples[sample_index].sample_start_time));
-
 	for (i = 0; i < FLS_DEF_SENSOR_WINDOW_LG; i++) {
 		if (sample_diff >= fls_def_sensor_window_sz[i] && conn->stats.isd.samples[sample_index].window[i].open) {
 			fls_def_sensor_window_close(&conn->stats.isd.samples[sample_index], &conn->stats.isd.samples[sample_index].window[i]);

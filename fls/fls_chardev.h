@@ -27,6 +27,32 @@
 #define FLS_CHARDEV_SAMPLES_MAX 10
 #define FLS_CHARDEV_WINDOWS_MAX 3
 
+enum FLS_PROTOCOL_TYPE
+{
+    UDP,
+    TCP
+};
+
+enum FLS_CMD_TYPE {
+	FLS_CHARDEV_FLUSH,
+	FLS_CHARDEV_EVENT
+};
+
+struct fls_packetinfo
+{
+    uint8_t cmd;
+    uint8_t version;
+    uint16_t length;
+    uint32_t src_ip;
+    uint32_t dst_ip;
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint8_t protocol;
+    uint32_t packet_size;
+    s64 timestamp_sec;
+    long timestamp_nsec;
+};
+
 enum fls_chardev_event_types {
 	FLS_CHARDEV_EVENT_TYPE_DEF
 };
