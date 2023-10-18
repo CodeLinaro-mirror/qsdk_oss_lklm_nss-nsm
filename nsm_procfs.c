@@ -257,7 +257,7 @@ static int nsm_procfs_tput_print_handler(struct ctl_table *table,
 						int write, void __user *buffer,
 						size_t *lenp, loff_t *ppos)
 {
-	unsigned int sid;
+	unsigned int sid, rem_pr, rem_br;
 	uint64_t packet_rate, byte_rate;
 
 	int ret = proc_dostring(table, write, buffer, lenp, ppos);
@@ -274,12 +274,14 @@ static int nsm_procfs_tput_print_handler(struct ctl_table *table,
 		return -1;
 	}
 
-	printk("[%u] Pps: %llu.%llu, Bps: %llu.%llu\n",
+	rem_pr = do_div(packet_rate ,NSM_NL_PREC);
+	rem_br = do_div(byte_rate,NSM_NL_PREC);
+	printk("[%u] Pps: %llu.%u, Bps: %llu.%u\n",
 		sid,
-		packet_rate / NSM_NL_PREC,
-		packet_rate % NSM_NL_PREC,
-		byte_rate / NSM_NL_PREC,
-		byte_rate % NSM_NL_PREC);
+		packet_rate,
+		rem_pr,
+		byte_rate,
+		rem_br);
 
 	return 0;
 }
