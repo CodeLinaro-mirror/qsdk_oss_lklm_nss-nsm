@@ -28,6 +28,7 @@
 #include "fls_debug.h"
 #include "fls_chardev.h"
 #include "fls_conn.h"
+
 struct fls_event_log {
 	uint32_t read_index;
 	uint32_t write_index;
@@ -47,6 +48,7 @@ static struct fls_chardev chardev;
 
 static struct fls_event_log event_log;
 static struct fls_event temp;
+static struct sk_buff dummy_skb;
 
 static int fls_chardev_fopen(struct inode *inode, struct file *file)
 {
@@ -93,8 +95,79 @@ static ssize_t fls_chardev_fread(struct file *file, char *buffer, size_t length,
 
 static ssize_t fls_chardev_fwrite(struct file *file, const char *buffer, size_t length, loff_t *offset)
 {
-	return -EINVAL;
+	int count;
+	struct fls_packetinfo packetinfo;
+	struct fls_conn *conn;
+
+	count = min(length, sizeof(struct fls_packetinfo));
+	if (copy_from_user((char*)&packetinfo, buffer, count)) {
+		FLS_ERROR("copy from user failed.\n");
+		return -EFAULT;
+	}
+
+	if(count < sizeof(packetinfo)) {
+		FLS_ERROR("packet size not correct\n");
+		return 0;
+	}
+
+	FLS_TRACE("Protocol: %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u, Size: %u bytes\n",
+               (packetinfo.src_ip >> 24) & 0xFF, (packetinfo.src_ip >> 16) & 0xFF, (packetinfo.src_ip >> 8) & 0xFF, packetinfo.src_ip & 0xFF,
+               packetinfo.src_port,
+               (packetinfo.dst_ip >> 24) & 0xFF, (packetinfo.dst_ip >> 16) & 0xFF, (packetinfo.dst_ip >> 8) & 0xFF, packetinfo.dst_ip & 0xFF,
+               packetinfo.dst_port,
+               packetinfo.packet_size);
+
+	switch (packetinfo.cmd) {
+		case FLS_CHARDEV_FLUSH:
+			/* flush all external connections */
+			FLS_TRACE("Flush external connections.\n");
+			fls_conn_flush();
+			return count;
+
+		case FLS_CHARDEV_EVENT:
+			break;
+
+		default:
+			FLS_ERROR("Unrecognized command %d.\n", packetinfo.cmd);
+			return 0;
+	}
+
+	conn = fls_conn_lookup(4, packetinfo.protocol,
+						&packetinfo.src_ip,
+						packetinfo.src_port,
+						&packetinfo.dst_ip,
+						packetinfo.dst_port);
+	FLS_TRACE("Lookup finished\n");
+	if(!conn) {
+		FLS_TRACE("Creating external connection\n.");
+		conn = fls_conn_create_bidiflow(4, packetinfo.protocol,
+						&packetinfo.src_ip,
+						packetinfo.src_port,
+						&packetinfo.dst_ip,
+						packetinfo.dst_port,
+						&packetinfo.dst_ip,
+						packetinfo.dst_port,
+						&packetinfo.src_ip,
+						packetinfo.src_port, true, packetinfo.timestamp_sec);
+		if(!conn) {
+			FLS_ERROR("Cannot create new bidiflow\n");
+			return 0;
+		}
+	} else {
+		FLS_TRACE("Found connection, updating last packetarrival = %ld\n", packetinfo.timestamp_sec);
+
+		conn->last_ts = packetinfo.timestamp_sec;
+		conn->reverse->last_ts = packetinfo.timestamp_sec;
+	}
+
+	dummy_skb.len = packetinfo.packet_size;
+	dummy_skb.tstamp = ktime_set(packetinfo.timestamp_sec, packetinfo.timestamp_nsec);
+	fls_def_sensor_packet_cb(NULL, conn, &dummy_skb);
+
+	return count;
 }
+
+
 
 static int fls_chardev_fmmap(struct file *file, struct vm_area_struct *vma)
 {

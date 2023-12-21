@@ -20,6 +20,7 @@
 #include "fls_debug.h"
 
 struct fls_conn_tracker fct;
+s64 fls_conn_timeout = 200;
 
 static inline uint32_t fls_conn_get_connection_hash(uint8_t ip_version, uint8_t protocol, uint32_t *src_ip, uint16_t src_port, uint32_t *dest_ip, uint16_t dest_port)
 {
@@ -76,7 +77,7 @@ static inline bool fls_conn_matches(struct fls_conn *connection,
 	return true;
 }
 
-static inline struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
+struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 								uint8_t protocol,
 								uint32_t *src_ip,
 								uint16_t src_port,
@@ -85,14 +86,14 @@ static inline struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 {
 	struct fls_conn *connection;
 	uint32_t hash;
-	spin_lock(&(fct.lock));
 	connection = fct.free_list;
 	if (!connection) {
-		spin_unlock(&(fct.lock));
+		FLS_ERROR("Connection max reached.\n");
 		return NULL;
 	}
 	fct.free_list = connection->all_next;
-	spin_unlock(&(fct.lock));
+	if(fct.free_list)
+		fct.free_list->all_prev = NULL;
 
 	if (ip_version == 6) {
 		connection->src_ip[0] = src_ip[0];
@@ -126,7 +127,6 @@ static inline struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 	connection->hash = hash;
 	connection->flags = FLS_CONNECTION_FLAG_ENABLE_MASK;
 
-	spin_lock(&(fct.lock));
 	connection->all_next = fct.all_connections_head;
 
 	if (fct.all_connections_head) {
@@ -135,13 +135,17 @@ static inline struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 
 	fct.all_connections_head = connection;
 
+	if (!fct.all_connections_tail) {
+		fct.all_connections_tail = connection;
+	}
+
 	connection->hash_next = fct.hash[hash];
 	if (fct.hash[hash]) {
 		fct.hash[hash]->hash_prev = connection;
 	}
 
 	fct.hash[hash] = connection;
-	spin_unlock(&(fct.lock));
+
 	return connection;
 }
 
@@ -163,35 +167,28 @@ struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 {
 	uint32_t hash = fls_conn_get_connection_hash(ip_version, protocol, src_ip, src_port, dest_ip, dest_port);
 	struct fls_conn *connection;
+	struct fls_conn *hash_head;
 
 	spin_lock(&(fct.lock));
 	connection = fct.hash[hash];
+	hash_head = connection;
 
 	while (connection) {
 		if (fls_conn_matches(connection, ip_version, protocol, src_ip, src_port, dest_ip, dest_port)) {
-			if (connection == fct.all_connections_head) {
+			if(connection == hash_head) {
 				spin_unlock(&(fct.lock));
 				return connection;
 			}
-
-			if (connection == fct.all_connections_tail) {
-				fct.all_connections_tail = connection->all_prev;
-				connection->all_prev->all_next = NULL;
-				connection->all_prev = NULL;
-				connection->all_next = fct.all_connections_head;
-				fct.all_connections_head = connection;
-				spin_unlock(&(fct.lock));
-				return connection;
-			}
-
-			connection->all_prev->all_next = connection->all_next;
-			connection->all_next->all_prev = connection->all_prev;
-			connection->all_next = fct.all_connections_head;
-			fct.all_connections_head = connection;
+			connection->hash_prev->hash_next = connection->hash_next;
+			if(connection->hash_next)
+				connection->hash_next->hash_prev = connection->hash_prev;
+			connection->hash_prev = NULL;
+			connection->hash_next = hash_head;
+			hash_head->hash_prev = connection;
+			fct.hash[hash] = connection;
 			spin_unlock(&(fct.lock));
 			return connection;
 		}
-
 		connection = connection->hash_next;
 	}
 
@@ -200,7 +197,7 @@ struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 }
 EXPORT_SYMBOL(fls_conn_lookup);
 
-void fls_conn_delete(void *conn)
+void fls_conn_delete_internal(void *conn)
 {
 	struct fls_conn *connection = (struct fls_conn *)conn;
 	struct fls_conn *reply = connection->reverse;
@@ -208,10 +205,6 @@ void fls_conn_delete(void *conn)
 		reply->reverse = NULL;
 	}
 
-	FLS_INFO("FID: Deleting connection.");
-	fls_debug_print_conn_info(connection);
-
-	spin_lock(&(fct.lock));
 	if (connection->all_prev) {
 		connection->all_prev->all_next = connection->all_next;
 	} else {
@@ -235,18 +228,148 @@ void fls_conn_delete(void *conn)
 	}
 
 	connection->all_next = fct.free_list;
+	fct.free_list->all_prev = connection;
 	connection->all_prev = NULL;
 	connection->hash_next = NULL;
 	connection->hash_prev = NULL;
+	connection->externalrule = false;
 	memset(&connection->stats, 0, sizeof(connection->stats));
 	fct.free_list = connection;
+}
+
+void fls_conn_flush() {
+	struct fls_conn *conn;
+	int i;
+	FLS_TRACE("flush external connection\n");
+	spin_lock(&(fct.lock));
+	for (i = 0; i < FLS_CONN_MAX; i++) {
+		conn = &(fct.connections[i]);
+		if(!conn->externalrule)
+			continue;
+		FLS_INFO("FID: Deleting connection.");
+		fls_debug_print_conn_info(conn);
+		fls_conn_delete_internal(conn);
+	}
+	spin_unlock(&(fct.lock));
+}
+
+/*
+ * fls_conn_delete()
+ *	Delete one connection.
+ */
+void fls_conn_delete(void *conn)
+{
+	FLS_INFO("FID: Deleting connection.");
+	fls_debug_print_conn_info(conn);
+	spin_lock(&(fct.lock));
+	fls_conn_delete_internal(conn);
 	spin_unlock(&(fct.lock));
 }
 EXPORT_SYMBOL(fls_conn_delete);
 
 /*
+ * fls_conn_delete_timeout()
+ *	Delete all timeout connection.
+ */
+bool fls_conn_delete_timeout(s64 now, s64 threshold) {
+	struct fls_conn *cur = fct.all_connections_head;
+	struct fls_conn *tmp;
+	bool findtimeout = false;
+	s64 oldest = cur->last_ts;
+	cur = cur->all_next;
+	while(cur) {
+		if(!cur->externalrule)
+			continue;
+		tmp = cur->all_next;
+		oldest = (oldest > cur->last_ts)? cur->last_ts:oldest;
+		if(now - cur->last_ts > threshold) {
+			findtimeout = true;
+			fls_conn_delete_internal(cur);
+		}
+		cur = tmp;
+	}
+
+	if(!findtimeout)
+		FLS_ERROR("FID: Cannot find old enough connections for reply, \
+				Oldest one = %ld \
+				(Try increase timeout value \
+				 echo xx(seconds) > /proc/sys/net/fls/conn_timeout\n", oldest);
+
+	return false;
+}
+
+/*
+ * fls_conn_create_bidiflow()
+ *	Creates a bidirectional flow in the connection database.
+ */
+struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
+						uint8_t protocol,
+						uint32_t *orig_src_ip,
+						uint16_t orig_src_port,
+						uint32_t *orig_dest_ip,
+						uint16_t orig_dest_port,
+						uint32_t *ret_src_ip,
+						uint16_t ret_src_port,
+						uint32_t *ret_dest_ip,
+						uint16_t ret_dest_port, bool isexternal, s64 last_ts) {
+	struct fls_conn *orig;
+	struct fls_conn *reply;
+	spin_lock(&(fct.lock));
+	orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
+	if (!orig && !isexternal) {
+		spin_unlock(&(fct.lock));
+		return NULL;
+	}
+
+	if(!orig) {
+		if(fls_conn_delete_timeout(last_ts, fls_conn_timeout)){
+			orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
+		} else {
+			spin_unlock(&(fct.lock));
+			return NULL;
+		}
+	}
+
+	orig->last_ts = last_ts;
+
+	reply = fls_conn_create_flow(ip_version, protocol, ret_src_ip, ret_src_port, ret_dest_ip, ret_dest_port);
+	if (!reply && !isexternal) {
+		spin_unlock(&(fct.lock));
+		fls_conn_delete(orig);
+		return NULL;
+	}
+
+	if(!reply) {
+		if(fls_conn_delete_timeout(last_ts, fls_conn_timeout)) {
+			reply = fls_conn_create_flow(ip_version, protocol, ret_src_ip, ret_src_port, ret_dest_ip, ret_dest_port);
+		} else {
+			spin_unlock(&(fct.lock));
+			fls_conn_delete(orig);
+			return NULL;
+		}
+	}
+
+	reply->last_ts = last_ts;
+
+	FLS_INFO("FID: creating fls external connection.");
+	fls_debug_print_conn_info(orig);
+
+	orig->externalrule = isexternal;
+	reply->externalrule = isexternal;
+
+	orig->reverse = reply;
+	reply->reverse = orig;
+	orig->dir = FLS_CONN_DIRECTION_ORIG;
+	reply->dir = FLS_CONN_DIRECTION_RET;
+	spin_unlock(&(fct.lock));
+
+	return orig;
+}
+
+/*
  * fls_conn_create()
- *	Creates a bidirectional connection in the connection database.
+ *	Creates a bidirectional connection for non-external connection
+ *	in the connection database.
  */
 void fls_conn_create(uint8_t ip_version,
 						uint8_t protocol,
@@ -259,51 +382,47 @@ void fls_conn_create(uint8_t ip_version,
 						uint32_t *ret_dest_ip,
 						uint16_t ret_dest_port,
 						void **orig_conn,
-						void **repl_conn)
-{
-	struct fls_conn *orig;
-	struct fls_conn *reply;
-	orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
-	if (!orig) {
-		*orig_conn = NULL;
-		*repl_conn = NULL;
+						void **repl_conn) {
+
+	struct fls_conn *orig = fls_conn_create_bidiflow(ip_version,
+						protocol,
+						orig_src_ip,
+						orig_src_port,
+						orig_dest_ip,
+						orig_dest_port,
+						ret_src_ip,
+						ret_src_port,
+						ret_dest_ip,
+						ret_dest_port, false, 0);
+
+	if(orig) {
+		*orig_conn = orig;
+		*repl_conn = orig->reverse;
 		return;
 	}
 
-	reply = fls_conn_create_flow(ip_version, protocol, ret_src_ip, ret_src_port, ret_dest_ip, ret_dest_port);
-	if (!reply) {
-		fls_conn_delete(orig);
-		*orig_conn = NULL;
-		*repl_conn = NULL;
-		return;
-	}
+	*orig_conn = NULL;
+	*repl_conn = NULL;
 
-	FLS_INFO("FID: creating fls connection.");
-	fls_debug_print_conn_info(orig);
-
-	orig->reverse = reply;
-	reply->reverse = orig;
-	orig->dir = FLS_CONN_DIRECTION_ORIG;
-	reply->dir = FLS_CONN_DIRECTION_RET;
-
-	*orig_conn = orig;
-	*repl_conn = reply;
 }
 EXPORT_SYMBOL(fls_conn_create);
 
 void fls_conn_tracker_init(void)
 {
 	uint32_t i;
+	struct fls_conn *conn;
 	memset(&fct, 0, sizeof(fct));
 	spin_lock_init(&fct.lock);
 	fls_sensor_manager_init(&fct.fsm);
 	for (i = 0; i < FLS_CONN_MAX; i++) {
-		struct fls_conn *conn = &(fct.connections[i]);
+		conn = &(fct.connections[i]);
 
 		/*
 		 * The free list is maintained as a singly-linked list because there's no need
 		 * to traverse it backward.
 		 */
+		if(fct.free_list)
+			fct.free_list->all_prev = conn;
 		conn->all_next = fct.free_list;
 		fct.free_list = conn;
 	}
