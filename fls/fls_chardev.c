@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -24,6 +24,7 @@
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/poll.h>
+#include <linux/version.h>
 
 #include "fls_debug.h"
 #include "fls_chardev.h"
@@ -265,7 +266,11 @@ int fls_chardev_init(void)
 		return ret;
 	}
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
 	chardev.cl = class_create(THIS_MODULE, FLS_CHARDEV_NAME);
+#else
+	chardev.cl = class_create(FLS_CHARDEV_NAME);
+#endif
 	device_create(chardev.cl, NULL, chardev.devid, NULL, FLS_CHARDEV_NAME);
 
 	return 0;

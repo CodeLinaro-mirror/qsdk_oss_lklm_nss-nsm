@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -143,24 +143,6 @@ static struct ctl_table fls_debug_table[] = {
 	{ }
 };
 
-static struct ctl_table fls_debug_dir[] = {
-	{
-		.procname	= "fls",
-		.mode		= 0555,
-		.child		= fls_debug_table,
-	},
-	{ }
-};
-
-static struct ctl_table fls_debug_root_dir[] = {
-	{
-		.procname	= "net",
-		.mode		= 0555,
-		.child		= fls_debug_dir,
-	},
-	{ }
-};
-
 static int fls_conn_ipv4_sprint(uint32_t addr, char *str, size_t len)
 {
 	return snprintf(str, len, "%u.%u.%u.%u",
@@ -263,7 +245,7 @@ void fls_debug_deinit(void)
 void fls_debug_init(void)
 {
 	fls_debug_level_current = FLS_DEBUG_LEVEL_DEFAULT;
-	fls_debug_header = register_sysctl_table(fls_debug_root_dir);
+	fls_debug_header = register_sysctl("net/fls", fls_debug_table);
 	if (!fls_debug_header) {
 		printk("Failed to register fls sysctl table.\n");
 	}
