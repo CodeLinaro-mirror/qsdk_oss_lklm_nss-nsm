@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -24,7 +24,9 @@
 
 #define NSM_PROCFS_DATA_SZ 32
 
-static struct ctl_table_header *nsm_procfs_header;
+static struct ctl_table_header *nsm_procfs_latency_header;
+static struct ctl_table_header *nsm_procfs_sfe_header;
+
 static char nsm_procfs_data[NSM_PROCFS_DATA_SZ];
 
 /*
@@ -364,46 +366,17 @@ static struct ctl_table nsm_procfs_sfe_table[] = {
 	{ }
 };
 
-static struct ctl_table nsm_procfs_child_dir[] = {
-	{
-		.procname = "latency",
-		.mode = 0555,
-		.child = nsm_procfs_latency_table
-	},
-	{
-		.procname = "sfe",
-		.mode = 0555,
-		.child = nsm_procfs_sfe_table
-	},
-	{ }
-};
-
-static struct ctl_table nsm_procfs_dir[] = {
-	{
-		.procname	= "nsm",
-		.mode		= 0555,
-		.child		= nsm_procfs_child_dir,
-	},
-	{ }
-};
-
-static struct ctl_table nsm_procfs_root_dir[] = {
-	{
-		.procname	= "net",
-		.mode		= 0555,
-		.child		= nsm_procfs_dir,
-	},
-	{ }
-};
-
 /*
  * nsm_procfs_deinit()
  *	Unregisters sysctl tables for NSM.
  */
 void nsm_procfs_deinit(void)
 {
-	if (nsm_procfs_header) {
-		unregister_sysctl_table(nsm_procfs_header);
+	if (nsm_procfs_latency_header) {
+		unregister_sysctl_table(nsm_procfs_latency_header);
+	}
+	if (nsm_procfs_sfe_header) {
+		unregister_sysctl_table(nsm_procfs_sfe_header);
 	}
 }
 
@@ -413,8 +386,12 @@ void nsm_procfs_deinit(void)
  */
 void nsm_procfs_init(void)
 {
-	nsm_procfs_header = register_sysctl_table(nsm_procfs_root_dir);
-	if (!nsm_procfs_header) {
-		printk("Failed to register nsm sysctl table.\n");
+	nsm_procfs_latency_header = register_sysctl("net/nsm/latency", nsm_procfs_latency_table);
+	if (!nsm_procfs_latency_header) {
+		printk("Failed to register nsm latency sysctl table.\n");
+	}
+	nsm_procfs_sfe_header = register_sysctl("net/nsm/sfe", nsm_procfs_sfe_table);
+	if (!nsm_procfs_sfe_header) {
+		printk("Failed to register nsm sfe sysctl table.\n");
 	}
 }
