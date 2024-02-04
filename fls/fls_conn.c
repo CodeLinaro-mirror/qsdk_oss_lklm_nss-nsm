@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -228,7 +228,9 @@ void fls_conn_delete_internal(void *conn)
 	}
 
 	connection->all_next = fct.free_list;
-	fct.free_list->all_prev = connection;
+	if (fct.free_list) {
+		fct.free_list->all_prev = connection;
+	}
 	connection->all_prev = NULL;
 	connection->hash_next = NULL;
 	connection->hash_prev = NULL;
@@ -271,18 +273,21 @@ EXPORT_SYMBOL(fls_conn_delete);
  * fls_conn_delete_timeout()
  *	Delete all timeout connection.
  */
-bool fls_conn_delete_timeout(s64 now, s64 threshold) {
+bool fls_conn_delete_timeout(ktime_t now, s64 threshold) {
 	struct fls_conn *cur = fct.all_connections_head;
 	struct fls_conn *tmp;
 	bool findtimeout = false;
-	s64 oldest = cur->last_ts;
+	int32_t abs_diff;
+
+	ktime_t oldest = cur->last_ts;
 	cur = cur->all_next;
 	while(cur) {
 		if(!cur->externalrule)
 			continue;
 		tmp = cur->all_next;
-		oldest = (oldest > cur->last_ts)? cur->last_ts:oldest;
-		if(now - cur->last_ts > threshold) {
+		oldest = ktime_compare(oldest, cur->last_ts) == 1? cur->last_ts:oldest;
+		abs_diff = ktime_to_ms(ktime_sub(now, cur->last_ts));
+		if(abs_diff / 1000 > threshold) {
 			findtimeout = true;
 			fls_conn_delete_internal(cur);
 		}
@@ -311,7 +316,7 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 						uint32_t *ret_src_ip,
 						uint16_t ret_src_port,
 						uint32_t *ret_dest_ip,
-						uint16_t ret_dest_port, bool isexternal, s64 last_ts) {
+						uint16_t ret_dest_port, bool isexternal, ktime_t last_ts) {
 	struct fls_conn *orig;
 	struct fls_conn *reply;
 	spin_lock(&(fct.lock));
@@ -351,7 +356,8 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 
 	reply->last_ts = last_ts;
 
-	FLS_INFO("FID: creating fls external connection.");
+	if(isexternal)
+		FLS_INFO("FID: creating fls %sconnection.", isexternal?"external ":"");
 	fls_debug_print_conn_info(orig);
 
 	orig->externalrule = isexternal;

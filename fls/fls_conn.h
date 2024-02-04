@@ -59,7 +59,7 @@ struct fls_conn {
 	struct fls_conn *all_next;
 	struct fls_conn *all_prev;
 	struct fls_conn_stats stats;
-	s64 last_ts;	/*last packet arrival*/
+	ktime_t last_ts;	/*last packet arrival*/
 };
 
 struct fls_conn_tracker {
@@ -101,7 +101,7 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 										uint32_t *ret_src_ip,
 										uint16_t ret_src_port,
 										uint32_t *ret_dest_ip,
-										uint16_t ret_dest_port, bool isexternal, s64 last_ts);
+										uint16_t ret_dest_port, bool isexternal, ktime_t last_ts);
 extern void fls_conn_create(uint8_t ip_version,
 										uint8_t protocol,
 										uint32_t *orig_src_ip,

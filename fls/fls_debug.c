@@ -104,6 +104,15 @@ static struct ctl_table fls_debug_table[] = {
 		.proc_handler	= &proc_douintvec_minmax,
 	},
 	{
+		.procname	= "stop_forever",
+		.data		= &fls_def_sensor_stop_forever,
+		.maxlen		= sizeof(fls_def_sensor_stop_forever),
+		.extra1		= &fls_debug_bool_min,
+		.extra2		= &fls_debug_bool_max,
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec_minmax,
+	},
+	{
 		.procname	= "stats_burst_en",
 		.data		= &fls_def_sensor_burst,
 		.maxlen		= sizeof(fls_def_sensor_burst),
@@ -132,6 +141,34 @@ static struct ctl_table fls_debug_table[] = {
 		.maxlen		= sizeof(fls_def_sensor_burst_long_intvl),
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec
+	},
+	{
+		.procname	= "xl_sz_threshold",
+		.data		= &fls_def_sensor_xl_sz_threshold,
+		.maxlen		= sizeof(fls_def_sensor_xl_sz_threshold),
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec,
+	},
+	{
+		.procname	= "xl_short",
+		.data		= &fls_def_sensor_xl_short,
+		.maxlen		= sizeof(fls_def_sensor_xl_short),
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec,
+	},
+	{
+		.procname	= "xl_long",
+		.data		= &fls_def_sensor_xl_long,
+		.maxlen		= sizeof(fls_def_sensor_xl_long),
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec,
+	},
+	{
+		.procname	= "xl_window",
+		.data		= &fls_def_sensor_xl_window,
+		.maxlen		= sizeof(fls_def_sensor_xl_window),
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec,
 	},
 	{
 		.procname	= "conn_timeout",

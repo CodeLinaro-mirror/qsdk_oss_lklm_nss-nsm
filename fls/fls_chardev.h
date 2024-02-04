@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -35,26 +35,31 @@ enum FLS_PROTOCOL_TYPE
 
 enum FLS_CMD_TYPE {
 	FLS_CHARDEV_FLUSH,
-	FLS_CHARDEV_EVENT
+	FLS_CHARDEV_EVENT,
+	FLS_CHARDEV_RESULT
 };
 
-struct fls_packetinfo
-{
-    uint8_t cmd;
-    uint8_t version;
-    uint16_t length;
-    uint32_t src_ip;
-    uint32_t dst_ip;
-    uint16_t src_port;
-    uint16_t dst_port;
-    uint8_t protocol;
-    uint32_t packet_size;
-    s64 timestamp_sec;
-    long timestamp_nsec;
+struct fls_cmdinfo {
+	uint8_t cmd;
+	uint8_t version;
+	uint32_t src_ip[4];
+	uint32_t dst_ip[4];
+	uint16_t src_port;
+	uint16_t dst_port;
+	uint8_t protocol;
+	union fls_data {
+		struct packetinfo{
+			uint32_t packet_size;
+			uint32_t timestamp_sec;
+			long timestamp_nsec;
+		} fls_packetinfo;
+		uint8_t classid;
+	} data;
 };
 
 enum fls_chardev_event_types {
-	FLS_CHARDEV_EVENT_TYPE_DEF
+	FLS_CHARDEV_EVENT_TYPE_DEF,
+	FLS_CHARDEV_EVENT_TYPE_XL /* Extra large window event type */
 };
 
 struct fls_def_event_window {
