@@ -57,6 +57,13 @@ struct fls_cmdinfo {
 	} data;
 };
 
+struct fls_chardev {
+	struct cdev cdev;
+	struct class *cl;
+	dev_t devid;
+	wait_queue_head_t readq;
+};
+
 enum fls_chardev_event_types {
 	FLS_CHARDEV_EVENT_TYPE_DEF,
 	FLS_CHARDEV_EVENT_TYPE_XL /* Extra large window event type */

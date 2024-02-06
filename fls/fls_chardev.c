@@ -40,13 +40,6 @@ struct fls_event_log {
 	spinlock_t write_lock;
 };
 
-struct fls_chardev {
-	struct cdev cdev;
-	struct class *cl;
-	dev_t devid;
-	wait_queue_head_t readq;
-};
-
 static struct fls_chardev chardev;
 
 static struct fls_event_log event_log;
