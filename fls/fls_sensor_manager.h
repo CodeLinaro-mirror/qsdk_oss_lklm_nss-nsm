@@ -25,7 +25,7 @@
 
 struct fls_conn;
 
-typedef void (*fls_sensor_cb)(void *app_data, struct fls_conn *conn, struct sk_buff *skb);
+typedef uint8_t (*fls_sensor_cb)(void *app_data, struct fls_conn *conn, struct sk_buff *skb);
 
 struct fls_sensor_manager {
 	uint8_t sensor_count;

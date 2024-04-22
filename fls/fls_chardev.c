@@ -152,9 +152,9 @@ static ssize_t fls_chardev_fwrite(struct file *file, const char *buffer, size_t 
 					conn->reverse->stats.isd.sendevent = false;
 				if (fls_def_sensor_max_events != -1 && fls_def_sensor_stop_forever)  {
 					FLS_TRACE("Lookup succeed! Stop XL collection (FOREVER).");
-					conn->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
+					conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 					if (conn->reverse) {
-						conn->reverse->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
+						conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 					}
 					spin_unlock(&fls_conn_lock);
 					return count;
