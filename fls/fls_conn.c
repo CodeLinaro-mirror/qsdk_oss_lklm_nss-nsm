@@ -125,7 +125,7 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 
 	hash = fls_conn_get_connection_hash(ip_version, protocol, src_ip, src_port, dest_ip, dest_port);
 	connection->hash = hash;
-	connection->flags = FLS_CONNECTION_FLAG_ENABLE_MASK;
+	connection->flags = SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 
 	connection->all_next = fct.all_connections_head;
 
@@ -149,12 +149,12 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 	return connection;
 }
 
-bool fls_conn_stats_update(void *connection, struct sk_buff *skb)
+uint8_t fls_conn_stats_update(void *connection, struct sk_buff *skb)
 {
 	struct fls_conn *conn = (struct fls_conn *)connection;
 
 	fls_sensor_manager_call_all(&fct.fsm, conn, skb);
-	return conn->flags & FLS_CONNECTION_FLAG_ENABLE_MASK;
+	return conn->flags;
 }
 EXPORT_SYMBOL(fls_conn_stats_update);
 

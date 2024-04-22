@@ -362,7 +362,7 @@ static void fls_def_sensor_window_close(struct fls_def_sensor_sample *sample, st
 	fls_def_sensor_burst_close(window);
 }
 
-void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb)
+uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb)
 {
 	ktime_t now;
 	uint32_t sample_index;
@@ -375,12 +375,17 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 
 	if (fls_def_sensor_max_events == 0 || sample_length == 0) {
 		FLS_TRACE("%p Default sensor disabled.\n", conn);
-		return;
+		return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
 	}
 
-	if (!(conn->flags & FLS_CONNECTION_FLAG_DEF_ENABLE)) {
+	if (!(conn->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
 		FLS_TRACE("%p Statistics disabled.\n", conn);
-		return;
+		return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
+	}
+
+	if (unlikely(conn->flags == SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED)) {
+		FLS_TRACE("%p HWM exceeded, Statistics disabled.\n", conn);
+		return SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
 	}
 
 	if(conn->externalrule) {
@@ -435,13 +440,13 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		}
 	}
 
-	if (!(conn->flags & FLS_CONNECTION_FLAG_DELAY_FINISHED)) {
+	if (!(conn->flags & SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED)) {
 		uint64_t diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.first_packet_time));
 		if (diff < delay) {
-			return;
+			return SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 		}
 
-		conn->flags |= FLS_CONNECTION_FLAG_DELAY_FINISHED;
+		conn->flags |= SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED;
 		FLS_INFO("%p Delay finished, starting data collection. t = %lld", conn, now);
 		conn->stats.isd.first_packet_time = now;
 		conn->stats.isd.event_start_time = now;
@@ -449,7 +454,7 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		conn->stats.isd.xl_sample.sample_start_time = now;
 
 		if (conn->reverse) {
-			conn->reverse->flags |= FLS_CONNECTION_FLAG_DELAY_FINISHED;
+			conn->reverse->flags |= SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED;
 			conn->reverse->stats.isd.first_packet_time = now;
 			conn->reverse->stats.isd.event_start_time = now;
 			conn->reverse->stats.isd.samples[0].sample_start_time = now;
@@ -480,10 +485,11 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		sample = &(conn->stats.isd.samples[sample_index]);
 		if ((fls_def_sensor_pkts_hwm && sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets >= fls_def_sensor_pkts_hwm) || (fls_def_sensor_bytes_hwm && sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes >= fls_def_sensor_bytes_hwm)) {
 			FLS_INFO("%p HWM exceeded. pkts=%u pkt_hwm=%u, bytes=%u bytes_hwm=%u", conn, sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets, fls_def_sensor_pkts_hwm, sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes, fls_def_sensor_bytes_hwm);
-			conn->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
+			conn->flags = SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
 			if (conn->reverse) {
-				conn->reverse->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
+				conn->reverse->flags = SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
 			}
+			return SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
 		}
 
 		if (fls_def_sensor_burst) {
@@ -560,12 +566,12 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 			 * If we have a nonnegative max event count and have passed it, disable this connection and return.
 			 */
 			if ((fls_def_sensor_max_events >= 0) && (event_count >= fls_def_sensor_max_events)) {
-				conn->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
+				conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 				if (reply) {
-					reply->flags &= ~FLS_CONNECTION_FLAG_DEF_ENABLE;
+					reply->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 				}
 
-				return;
+				return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
 			}
 
 			conn->stats.isd.event_start_time = event_start_new;
@@ -620,6 +626,8 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 	sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
 	if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
 		xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+
+	return SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 }
 
 bool fls_def_sensor_init(struct fls_sensor_manager *fsm)

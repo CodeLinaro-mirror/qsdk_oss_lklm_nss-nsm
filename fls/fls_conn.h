@@ -21,12 +21,10 @@
 
 #include <linux/types.h>
 #include <linux/spinlock.h>
+#include <linux/if_ether.h>
+#include <sfe_api.h>
 #include "fls_sensor_manager.h"
 #include "fls_def_sensor.h"
-
-#define FLS_CONNECTION_FLAG_DEF_ENABLE 1
-#define FLS_CONNECTION_FLAG_DELAY_FINISHED 2
-#define FLS_CONNECTION_FLAG_ENABLE_MASK (FLS_CONNECTION_FLAG_DEF_ENABLE)
 
 #define FLS_CONN_HASH_SHIFT 12
 #define FLS_CONN_HASH_SIZE (1 << FLS_CONN_HASH_SHIFT)
@@ -76,7 +74,7 @@ struct fls_conn_tracker {
 extern struct fls_conn_tracker fct;
 extern s64 fls_conn_timeout;
 
-extern bool fls_conn_stats_update(void *connection, struct sk_buff *skb);
+extern uint8_t fls_conn_stats_update(void *connection, struct sk_buff *skb);
 extern struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 											uint8_t protocol,
 											uint32_t *src_ip,

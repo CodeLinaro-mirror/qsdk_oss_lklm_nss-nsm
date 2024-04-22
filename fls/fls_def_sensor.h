@@ -101,5 +101,5 @@ struct fls_def_sensor_data {
 };
 
 bool fls_def_sensor_init(struct fls_sensor_manager *fsm);
-void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb);
+uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb);
 #endif
