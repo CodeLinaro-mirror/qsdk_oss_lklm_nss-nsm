@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -26,12 +26,14 @@
 #define FLS_DEF_SENSOR_MAX_EVENTS_DEF -1
 #define FLS_DEF_SENSOR_DYNAMIC_SAMPLES_DEF true
 
+
 uint32_t fls_def_sensor_delay;
 uint32_t fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOWS];
 int32_t fls_def_sensor_max_events;
 uint32_t fls_def_sensor_sample_count;
 uint32_t fls_def_sensor_bytes;
 uint32_t fls_def_sensor_ipat;
+uint32_t fls_def_sensor_stop_forever;
 uint32_t fls_def_sensor_burst;
 uint32_t fls_def_sensor_burst_threshold[FLS_DEF_SENSOR_WINDOWS];
 uint32_t fls_def_sensor_burst_short_intvl[FLS_DEF_SENSOR_WINDOWS];
@@ -40,6 +42,10 @@ bool fls_def_sensor_dynamic_samples;
 static struct fls_event event;
 uint32_t fls_def_sensor_pkts_hwm;
 uint32_t fls_def_sensor_bytes_hwm;
+uint32_t fls_def_sensor_xl_sz_threshold;
+uint32_t fls_def_sensor_xl_short;
+uint32_t fls_def_sensor_xl_long;
+uint32_t fls_def_sensor_xl_window;
 
 static void fls_def_sensor_window_to_event_window(struct fls_def_sensor_window *orig_sw, struct fls_def_sensor_window *repl_sw, struct fls_def_event_window *ew)
 {
@@ -105,8 +111,15 @@ static void fls_def_sensor_window_to_event_window(struct fls_def_sensor_window *
 		repl_sw->burst_dur_max = 0;
 }
 
-static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
+/*
+ * fls_def_sensor_event_create
+ * 	conn: connection which event will be created upon.
+ *	time: timestamp.
+ * 	isXL: Event is a X large Large window event.
+ */
+static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, bool isXL)
 {
+	bool sendevent = conn->stats.isd.sendevent;
 	uint32_t i;
 	struct fls_conn *orig;
 	struct fls_conn *reverse;
@@ -124,38 +137,66 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
 		reverse = conn;
 	}
 
-	event.event_type = FLS_CHARDEV_EVENT_TYPE_DEF;
-	event.dir = 0xEB;
-	event.ip_version = conn->ip_version;
-	event.protocol = conn->protocol;
+	if (sendevent) {
+		event.event_type = isXL? FLS_CHARDEV_EVENT_TYPE_XL : FLS_CHARDEV_EVENT_TYPE_DEF;
+		event.dir = 0xEB;
+		event.ip_version = conn->ip_version;
+		event.protocol = conn->protocol;
 
-	event.orig_src_port = orig->src_port;
-	event.orig_dest_port = orig->dest_port;
-	event.orig_src_ip[0] = orig->src_ip[0];
-	event.orig_src_ip[1] = orig->src_ip[1];
-	event.orig_src_ip[2] = orig->src_ip[2];
-	event.orig_src_ip[3] = orig->src_ip[3];
-	event.orig_dest_ip[0] = orig->dest_ip[0];
-	event.orig_dest_ip[1] = orig->dest_ip[1];
-	event.orig_dest_ip[2] = orig->dest_ip[2];
-	event.orig_dest_ip[3] = orig->dest_ip[3];
+		event.orig_src_port = orig->src_port;
+		event.orig_dest_port = orig->dest_port;
+		event.orig_src_ip[0] = orig->src_ip[0];
+		event.orig_src_ip[1] = orig->src_ip[1];
+		event.orig_src_ip[2] = orig->src_ip[2];
+		event.orig_src_ip[3] = orig->src_ip[3];
+		event.orig_dest_ip[0] = orig->dest_ip[0];
+		event.orig_dest_ip[1] = orig->dest_ip[1];
+		event.orig_dest_ip[2] = orig->dest_ip[2];
+		event.orig_dest_ip[3] = orig->dest_ip[3];
 
-	event.ret_src_port = reverse->src_port;
-	event.ret_dest_port = reverse->dest_port;
-	event.ret_src_ip[0] = reverse->src_ip[0];
-	event.ret_src_ip[1] = reverse->src_ip[1];
-	event.ret_src_ip[2] = reverse->src_ip[2];
-	event.ret_src_ip[3] = reverse->src_ip[3];
-	event.ret_dest_ip[0] = reverse->dest_ip[0];
-	event.ret_dest_ip[1] = reverse->dest_ip[1];
-	event.ret_dest_ip[2] = reverse->dest_ip[2];
-	event.ret_dest_ip[3] = reverse->dest_ip[3];
+		event.ret_src_port = reverse->src_port;
+		event.ret_dest_port = reverse->dest_port;
+		event.ret_src_ip[0] = reverse->src_ip[0];
+		event.ret_src_ip[1] = reverse->src_ip[1];
+		event.ret_src_ip[2] = reverse->src_ip[2];
+		event.ret_src_ip[3] = reverse->src_ip[3];
+		event.ret_dest_ip[0] = reverse->dest_ip[0];
+		event.ret_dest_ip[1] = reverse->dest_ip[1];
+		event.ret_dest_ip[2] = reverse->dest_ip[2];
+		event.ret_dest_ip[3] = reverse->dest_ip[3];
+	}
+
+	orig->stats.isd.sendevent = true;
+	reverse->stats.isd.sendevent = true;
 
 	event.timestamp = time;
 
-	event.def_event.sample_count = fls_def_sensor_sample_count;
-	for (i = 0; i < FLS_DEF_SENSOR_WINDOWS; i++) {
-		event.def_event.window_length[i] = fls_def_sensor_window_sz[i];
+	if (isXL) {
+		FLS_TRACE("%px: %sEnqueue XL event\n", conn, sendevent? "Skip ":"");
+
+		/*
+		 * sample[0].window[0] contains large window data.
+		 * window will be closed until next sample starts.
+		 */
+		fls_def_sensor_window_to_event_window(&orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG], &reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG],&event.def_event.samples[0].window[0]);
+		orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = false;
+		reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = false;
+		orig->stats.isd.xl_sample.last_packet_time = 0;
+		reverse->stats.isd.xl_sample.last_packet_time = 0;
+		event.def_event.window_length[0] = fls_def_sensor_xl_window;
+		event.def_event.sample_count = 1;
+
+		if (sendevent && !fls_chardev_enqueue(&event)) {
+			FLS_WARN("XL Event dropped!\n");
+		}
+		return;
+	}
+
+	if (sendevent) {
+		event.def_event.sample_count = fls_def_sensor_sample_count;
+		for (i = 0; i < FLS_DEF_SENSOR_WINDOWS; i++) {
+			event.def_event.window_length[i] = fls_def_sensor_window_sz[i];
+		}
 	}
 
 	for (i = 0; i < fls_def_sensor_sample_count; i++) {
@@ -170,7 +211,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time)
 		reverse->stats.isd.samples[i].last_packet_time = 0;
 	}
 
-	if (!fls_chardev_enqueue(&event)) {
+	if (sendevent && !fls_chardev_enqueue(&event)) {
 		FLS_WARN("Event dropped!\n");
 	}
 }
@@ -326,9 +367,10 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 	ktime_t now;
 	uint32_t sample_index;
 	struct fls_def_sensor_sample *sample;
+	struct fls_def_sensor_sample *xl_sample;
 	uint32_t delay = fls_def_sensor_delay;
 	uint32_t sample_length = fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_LG];
-	int64_t sample_diff;
+	int64_t sample_diff, xl_diff;
 	int i;
 
 	if (fls_def_sensor_max_events == 0 || sample_length == 0) {
@@ -354,6 +396,10 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		conn->stats.isd.event_start_time = now;
 		conn->stats.isd.samples[0].sample_start_time = now;
 
+		/* Initializing X large window. */
+		conn->stats.isd.xl_sample.sample_start_time = now;
+		conn->stats.isd.sendevent = true;
+
 		for (i = 0; i < FLS_DEF_SENSOR_MAX_SAMPLE_COUNT; i++) {
 			int j;
 
@@ -362,11 +408,19 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 			}
 		}
 
+		/*
+		 * For X large sample, Only the last window is opened for data collection
+		 */
+		FLS_TRACE("%p start XL window to now \n", conn);
+		conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+
 		if (conn->reverse) {
 			struct fls_conn *reverse = conn->reverse;
 			reverse->stats.isd.first_packet_time = now;
 			reverse->stats.isd.event_start_time = now;
 			reverse->stats.isd.samples[0].sample_start_time = now;
+			reverse->stats.isd.xl_sample.sample_start_time = now;
+			reverse->stats.isd.sendevent = true;
 
 			for (i = 0; i < FLS_DEF_SENSOR_MAX_SAMPLE_COUNT; i++) {
 				int j;
@@ -375,11 +429,13 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 					reverse->stats.isd.samples[i].window[j].open = true;
 				}
 			}
+
+			reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
 		}
 	}
 
 	if (!(conn->flags & FLS_CONNECTION_FLAG_DELAY_FINISHED)) {
-		int64_t diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.first_packet_time));
+		uint64_t diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.first_packet_time));
 		if (diff < delay) {
 			return;
 		}
@@ -389,12 +445,14 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		conn->stats.isd.first_packet_time = now;
 		conn->stats.isd.event_start_time = now;
 		conn->stats.isd.samples[0].sample_start_time = now;
+		conn->stats.isd.xl_sample.sample_start_time = now;
 
 		if (conn->reverse) {
 			conn->reverse->flags |= FLS_CONNECTION_FLAG_DELAY_FINISHED;
 			conn->reverse->stats.isd.first_packet_time = now;
 			conn->reverse->stats.isd.event_start_time = now;
 			conn->reverse->stats.isd.samples[0].sample_start_time = now;
+			conn->reverse->stats.isd.xl_sample.sample_start_time = now;
 		}
 
 		fls_debug_print_conn_info(conn);
@@ -433,11 +491,39 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 
 		sample_index += 1;
 		FLS_TRACE("%p increased sample_index to %u", conn, sample_index);
+
+	 	/* XL window (if closed) will be realigned when new sample is created. */
+		if(!conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open) {
+			FLS_TRACE("%p Open and reaglign XL window to now \n", conn);
+			conn->stats.isd.xl_sample.sample_start_time = now;
+			conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+			if (conn->reverse) {
+				conn->reverse->stats.isd.xl_sample.sample_start_time = now;
+				conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+			}
+		}
+
 		if (sample_index < fls_def_sensor_sample_count) {
 			conn->stats.isd.samples[sample_index].sample_start_time = now;
 			if (conn->reverse) {
 				conn->reverse->stats.isd.samples[sample_index].sample_start_time = now;
 			}
+		}
+	}
+
+	if (conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open) {
+		xl_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.xl_sample.sample_start_time));
+		if(xl_diff >= fls_def_sensor_xl_window) {
+
+			/*
+			 * No need to invoke window_close function
+			 * since WINDOW_LG itself is used for X large samples.
+			 */
+			if (fls_def_sensor_burst) {
+				fls_def_sensor_burst_close(&conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
+			}
+			FLS_TRACE("%px Sending XL window with burst_cnt = %d\n", conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
+			fls_def_sensor_event_create(conn, now, true);
 		}
 	}
 
@@ -465,7 +551,7 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 		 */
 		if ((event_count > conn->stats.isd.events)) {
 			struct fls_conn *reply = conn->reverse;
-			fls_def_sensor_event_create(conn, now);
+			fls_def_sensor_event_create(conn, now, false);
 			conn->stats.isd.events = event_count;
 			if (reply) {
 				reply->stats.isd.events = event_count;
@@ -494,6 +580,17 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 
 			sample_index = 0;
 			conn->stats.isd.samples[sample_index].sample_start_time = now;
+
+			if(!conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open) {
+				FLS_TRACE("%p Open and reaglign XL window to now \n", conn);
+				conn->stats.isd.xl_sample.sample_start_time = now;
+				conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+				if(reply) {
+					reply->stats.isd.xl_sample.sample_start_time = now;
+					reply->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+				}
+			}
+
 			if (reply) {
 				reply->stats.isd.samples[sample_index].sample_start_time = now;
 			}
@@ -501,17 +598,25 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 	}
 
 	conn->stats.isd.sample_index = sample_index;
+
+	xl_sample = &(conn->stats.isd.xl_sample);
+
 	if (conn->reverse) {
 		conn->reverse->stats.isd.sample_index = sample_index;
 	}
 
 	sample = &(conn->stats.isd.samples[sample_index]);
 
+	/* Record window data, along with XL window if it is open. */
 	if (fls_def_sensor_bytes) {
 		fls_def_sensor_bytes_record(sample, skb->len);
+		if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			fls_def_sensor_bytes_record(xl_sample, skb->len);
 	}
 	if (fls_def_sensor_ipat) {
 		fls_def_sensor_ipat_record(sample, now);
+		if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			fls_def_sensor_ipat_record(xl_sample, now);
 	}
 	if (fls_def_sensor_burst) {
 		for (i = 0; i < FLS_DEF_SENSOR_WINDOWS; i++){
@@ -519,8 +624,13 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 				fls_def_sensor_burst_record(&sample->window[i], now, skb->len, fls_def_sensor_burst_threshold[i], fls_def_sensor_burst_short_intvl[i], fls_def_sensor_burst_long_intvl[i]);
 			}
 		}
+		if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open) {
+			fls_def_sensor_burst_record(&xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG], now, skb->len, fls_def_sensor_xl_sz_threshold, fls_def_sensor_xl_short, fls_def_sensor_xl_long);
+		}
 	}
 	sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+	if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+		xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
 }
 
 bool fls_def_sensor_init(struct fls_sensor_manager *fsm)
@@ -531,7 +641,16 @@ bool fls_def_sensor_init(struct fls_sensor_manager *fsm)
 	fls_def_sensor_sample_count = FLS_DEF_SENSOR_MAX_SAMPLE_COUNT;
 	fls_def_sensor_bytes = 1;
 	fls_def_sensor_ipat = 1;
+
+	fls_def_sensor_stop_forever = 1;
+
 	fls_def_sensor_bytes_hwm = 0;
 	fls_def_sensor_pkts_hwm = 0;
+	fls_def_sensor_burst = 1;
+	fls_def_sensor_xl_sz_threshold = 0;
+	fls_def_sensor_xl_short = 0;
+	fls_def_sensor_xl_long = 0;
+	fls_def_sensor_xl_window = 0;
+
 	return fls_sensor_manager_register(fsm, fls_def_sensor_packet_cb, NULL);
 }

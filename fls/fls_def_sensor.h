@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -35,12 +35,18 @@ extern int32_t fls_def_sensor_max_events;
 extern uint32_t fls_def_sensor_sample_count;
 extern uint32_t fls_def_sensor_bytes;
 extern uint32_t fls_def_sensor_ipat;
+extern uint32_t fls_def_sensor_stop_forever;
 extern uint32_t fls_def_sensor_pkts_hwm;
 extern uint32_t fls_def_sensor_bytes_hwm;
 extern uint32_t fls_def_sensor_burst;
 extern uint32_t fls_def_sensor_burst_threshold[FLS_DEF_SENSOR_WINDOWS];
 extern uint32_t fls_def_sensor_burst_short_intvl[FLS_DEF_SENSOR_WINDOWS];
 extern uint32_t fls_def_sensor_burst_long_intvl[FLS_DEF_SENSOR_WINDOWS];
+extern uint32_t fls_def_sensor_xl_sz_threshold;
+extern uint32_t fls_def_sensor_xl_short;
+extern uint32_t fls_def_sensor_xl_long;
+extern uint32_t fls_def_sensor_xl_window;
+
 struct fls_def_sensor_burst {
 	bool active;
 	uint32_t sz;
@@ -77,6 +83,19 @@ struct fls_def_sensor_data {
 	struct fls_def_sensor_sample samples[FLS_DEF_SENSOR_MAX_SAMPLE_COUNT];
 	ktime_t first_packet_time;
 	ktime_t event_start_time;
+	struct fls_def_sensor_sample xl_sample;
+
+	/* sendevent:
+	 * true - send event when it is generated.
+	 * false - not send the event to IFLI when it is generated.
+	 * sendevent will be set to false
+	 * when receive stop_cmd and if either below is true:
+	 *	stop_forever == false
+	 *	stop_forever == true and max_events == -1.
+	 * sendevent will be reset to true when next XL window event generates.
+	 */
+	bool sendevent;
+
 	uint32_t sample_index;
 	uint32_t events;
 };
