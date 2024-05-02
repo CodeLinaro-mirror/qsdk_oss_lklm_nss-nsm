@@ -137,38 +137,32 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, boo
 		reverse = conn;
 	}
 
-	if (sendevent) {
-		event.event_type = isXL? FLS_CHARDEV_EVENT_TYPE_XL : FLS_CHARDEV_EVENT_TYPE_DEF;
-		event.dir = 0xEB;
-		event.ip_version = conn->ip_version;
-		event.protocol = conn->protocol;
+	event.event_type = isXL? FLS_CHARDEV_EVENT_TYPE_XL : FLS_CHARDEV_EVENT_TYPE_DEF;
+	event.dir = 0xEB;
+	event.ip_version = conn->ip_version;
+	event.protocol = conn->protocol;
 
-		event.orig_src_port = orig->src_port;
-		event.orig_dest_port = orig->dest_port;
-		event.orig_src_ip[0] = orig->src_ip[0];
-		event.orig_src_ip[1] = orig->src_ip[1];
-		event.orig_src_ip[2] = orig->src_ip[2];
-		event.orig_src_ip[3] = orig->src_ip[3];
-		event.orig_dest_ip[0] = orig->dest_ip[0];
-		event.orig_dest_ip[1] = orig->dest_ip[1];
-		event.orig_dest_ip[2] = orig->dest_ip[2];
-		event.orig_dest_ip[3] = orig->dest_ip[3];
+	event.orig_src_port = orig->src_port;
+	event.orig_dest_port = orig->dest_port;
+	event.orig_src_ip[0] = orig->src_ip[0];
+	event.orig_src_ip[1] = orig->src_ip[1];
+	event.orig_src_ip[2] = orig->src_ip[2];
+	event.orig_src_ip[3] = orig->src_ip[3];
+	event.orig_dest_ip[0] = orig->dest_ip[0];
+	event.orig_dest_ip[1] = orig->dest_ip[1];
+	event.orig_dest_ip[2] = orig->dest_ip[2];
+	event.orig_dest_ip[3] = orig->dest_ip[3];
 
-		event.ret_src_port = reverse->src_port;
-		event.ret_dest_port = reverse->dest_port;
-		event.ret_src_ip[0] = reverse->src_ip[0];
-		event.ret_src_ip[1] = reverse->src_ip[1];
-		event.ret_src_ip[2] = reverse->src_ip[2];
-		event.ret_src_ip[3] = reverse->src_ip[3];
-		event.ret_dest_ip[0] = reverse->dest_ip[0];
-		event.ret_dest_ip[1] = reverse->dest_ip[1];
-		event.ret_dest_ip[2] = reverse->dest_ip[2];
-		event.ret_dest_ip[3] = reverse->dest_ip[3];
-	}
-
-	orig->stats.isd.sendevent = true;
-	reverse->stats.isd.sendevent = true;
-
+	event.ret_src_port = reverse->src_port;
+	event.ret_dest_port = reverse->dest_port;
+	event.ret_src_ip[0] = reverse->src_ip[0];
+	event.ret_src_ip[1] = reverse->src_ip[1];
+	event.ret_src_ip[2] = reverse->src_ip[2];
+	event.ret_src_ip[3] = reverse->src_ip[3];
+	event.ret_dest_ip[0] = reverse->dest_ip[0];
+	event.ret_dest_ip[1] = reverse->dest_ip[1];
+	event.ret_dest_ip[2] = reverse->dest_ip[2];
+	event.ret_dest_ip[3] = reverse->dest_ip[3];
 	event.timestamp = time;
 
 	if (isXL) {
@@ -189,14 +183,15 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, boo
 		if (sendevent && !fls_chardev_enqueue(&event)) {
 			FLS_WARN("XL Event dropped!\n");
 		}
+		// enable sendevent for XL only.
+		orig->stats.isd.sendevent = true;
+		reverse->stats.isd.sendevent = true;
 		return;
 	}
 
-	if (sendevent) {
-		event.def_event.sample_count = fls_def_sensor_sample_count;
-		for (i = 0; i < FLS_DEF_SENSOR_WINDOWS; i++) {
-			event.def_event.window_length[i] = fls_def_sensor_window_sz[i];
-		}
+	event.def_event.sample_count = fls_def_sensor_sample_count;
+	for (i = 0; i < FLS_DEF_SENSOR_WINDOWS; i++) {
+		event.def_event.window_length[i] = fls_def_sensor_window_sz[i];
 	}
 
 	for (i = 0; i < fls_def_sensor_sample_count; i++) {
@@ -211,7 +206,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, boo
 		reverse->stats.isd.samples[i].last_packet_time = 0;
 	}
 
-	if (sendevent && !fls_chardev_enqueue(&event)) {
+	if (!fls_chardev_enqueue(&event)) {
 		FLS_WARN("Event dropped!\n");
 	}
 }
