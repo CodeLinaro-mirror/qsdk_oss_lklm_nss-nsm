@@ -25,6 +25,7 @@
 #include <linux/uaccess.h>
 #include <linux/poll.h>
 #include <linux/version.h>
+#include <linux/delay.h>
 
 #include "fls_debug.h"
 #include "fls_chardev.h"
@@ -204,6 +205,12 @@ static ssize_t fls_chardev_fwrite(struct file *file, const char *buffer, size_t 
 	dummy_skb.tstamp = ktime_set(packetinfo.data.fls_packetinfo.timestamp_sec, packetinfo.data.fls_packetinfo.timestamp_nsec);
 	fls_def_sensor_packet_cb(NULL, conn, &dummy_skb);
 	spin_unlock(&fls_conn_lock);
+
+	//limit the speed of creating events.	
+	if (((event_log.write_index - event_log.read_index + FLS_CHARDEV_EVENT_MASK) & FLS_CHARDEV_EVENT_MASK) > FLS_CHARDEV_EVENTS_LIMIT){
+		while(event_log.write_index != event_log.read_index)
+				msleep(1);
+	}
 
 	return count;
 }
