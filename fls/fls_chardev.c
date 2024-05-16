@@ -184,10 +184,7 @@ static ssize_t fls_chardev_fwrite(struct file *file, const char *buffer, size_t 
 						packetinfo.src_port,
 						&packetinfo.dst_ip[0],
 						packetinfo.dst_port,
-						&packetinfo.dst_ip[0],
-						packetinfo.dst_port,
-						&packetinfo.src_ip[0],
-						packetinfo.src_port, true, packetinfo.data.fls_packetinfo.timestamp_nsec);
+						true, packetinfo.data.fls_packetinfo.timestamp_nsec);
 		if(!conn) {
 			FLS_ERROR("Cannot create new bidiflow\n");
 			spin_unlock(&fls_conn_lock);
