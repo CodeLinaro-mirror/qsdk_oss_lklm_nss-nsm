@@ -313,10 +313,7 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 						uint16_t orig_src_port,
 						uint32_t *orig_dest_ip,
 						uint16_t orig_dest_port,
-						uint32_t *ret_src_ip,
-						uint16_t ret_src_port,
-						uint32_t *ret_dest_ip,
-						uint16_t ret_dest_port, bool isexternal, ktime_t last_ts) {
+						bool isexternal, ktime_t last_ts) {
 	struct fls_conn *orig;
 	struct fls_conn *reply;
 	spin_lock(&(fct.lock));
@@ -337,7 +334,7 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 
 	orig->last_ts = last_ts;
 
-	reply = fls_conn_create_flow(ip_version, protocol, ret_src_ip, ret_src_port, ret_dest_ip, ret_dest_port);
+	reply = fls_conn_create_flow(ip_version, protocol, orig_dest_ip, orig_dest_port, orig_src_ip, orig_src_port);
 	if (!reply && !isexternal) {
 		spin_unlock(&(fct.lock));
 		fls_conn_delete(orig);
@@ -346,7 +343,7 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 
 	if(!reply) {
 		if(fls_conn_delete_timeout(last_ts, fls_conn_timeout)) {
-			reply = fls_conn_create_flow(ip_version, protocol, ret_src_ip, ret_src_port, ret_dest_ip, ret_dest_port);
+			reply = fls_conn_create_flow(ip_version, protocol, orig_dest_ip, orig_dest_port, orig_src_ip, orig_src_port);
 		} else {
 			spin_unlock(&(fct.lock));
 			fls_conn_delete(orig);
@@ -383,10 +380,6 @@ void fls_conn_create(uint8_t ip_version,
 						uint16_t orig_src_port,
 						uint32_t *orig_dest_ip,
 						uint16_t orig_dest_port,
-						uint32_t *ret_src_ip,
-						uint16_t ret_src_port,
-						uint32_t *ret_dest_ip,
-						uint16_t ret_dest_port,
 						void **orig_conn,
 						void **repl_conn) {
 
@@ -396,10 +389,7 @@ void fls_conn_create(uint8_t ip_version,
 						orig_src_port,
 						orig_dest_ip,
 						orig_dest_port,
-						ret_src_ip,
-						ret_src_port,
-						ret_dest_ip,
-						ret_dest_port, false, 0);
+						false, 0);
 
 	if(orig) {
 		*orig_conn = orig;
