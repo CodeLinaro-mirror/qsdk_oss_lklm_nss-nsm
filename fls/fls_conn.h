@@ -98,20 +98,13 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 										uint16_t orig_src_port,
 										uint32_t *orig_dest_ip,
 										uint16_t orig_dest_port,
-										uint32_t *ret_src_ip,
-										uint16_t ret_src_port,
-										uint32_t *ret_dest_ip,
-										uint16_t ret_dest_port, bool isexternal, ktime_t last_ts);
+										bool isexternal, ktime_t last_ts);
 extern void fls_conn_create(uint8_t ip_version,
 										uint8_t protocol,
 										uint32_t *orig_src_ip,
 										uint16_t orig_src_port,
 										uint32_t *orig_dest_ip,
 										uint16_t orig_dest_port,
-										uint32_t *ret_src_ip,
-										uint16_t ret_src_port,
-										uint32_t *ret_dest_ip,
-										uint16_t ret_dest_port,
 										void **orig_conn,
 										void **repl_conn);
 void fls_conn_tracker_init(void);
