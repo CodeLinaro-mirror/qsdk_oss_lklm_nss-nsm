@@ -34,6 +34,8 @@ struct fls_tm_flow {
 	uint64_t ret_bytes;			/* Return Direction Bytes */
 	uint64_t org_pkts;			/* Original Direction Packets */
 	uint64_t ret_pkts;			/* Return Direction Packets */
+	char src_if[IFNAMSIZ];			/* Buffer containing source interface name */
+	char dst_if[IFNAMSIZ];			/* Buffer containing destination interface name */
 };
 
 bool fls_tm_init(void);
