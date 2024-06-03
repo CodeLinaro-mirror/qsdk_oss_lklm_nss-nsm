@@ -173,10 +173,14 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, boo
 		 * window will be closed until next sample starts.
 		 */
 		fls_def_sensor_window_to_event_window(&orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG], &reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG],&event.def_event.samples[0].window[0]);
-		orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = false;
-		reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = false;
+
 		orig->stats.isd.xl_sample.last_packet_time = 0;
 		reverse->stats.isd.xl_sample.last_packet_time = 0;
+
+		//Reset the start time for the next XL event.
+		orig->stats.isd.xl_sample.sample_start_time = time;
+		reverse->stats.isd.xl_sample.sample_start_time = time;
+		
 		event.def_event.window_length[0] = fls_def_sensor_xl_window;
 		event.def_event.sample_count = 1;
 
@@ -244,12 +248,12 @@ static void fls_def_sensor_burst_close(struct fls_def_sensor_window *window)
 	ktime_t dur;
 
 	if (!window->burst_data.active) {
-		memset(&(window->burst_data), 0, sizeof(window->burst_data));
+		memset(&(window->burst_data), 0, sizeof(struct fls_def_sensor_burst));
 		return;
 	}
 
 	dur = ktime_sub(window->burst_data.last, window->burst_data.start);
-
+	
 	if (window->bursts == 0) {
 		window->burst_dur_sum = dur;
 		window->burst_dur_min = dur;
@@ -259,6 +263,7 @@ static void fls_def_sensor_burst_close(struct fls_def_sensor_window *window)
 		window->burst_sz_min = window->burst_data.sz;
 		window->burst_sz_max = window->burst_data.sz;
 
+		memset(&(window->burst_data), 0, sizeof(struct fls_def_sensor_burst));
 		window->bursts++;
 		return;
 	}
@@ -279,12 +284,12 @@ static void fls_def_sensor_burst_close(struct fls_def_sensor_window *window)
 		window->burst_sz_max = window->burst_data.sz;
 	}
 
-	memset(&(window->burst_data), 0, sizeof(window->burst_data));
+	memset(&(window->burst_data), 0, sizeof(struct fls_def_sensor_burst));
 }
 
 static void fls_def_sensor_burst_record(struct fls_def_sensor_window *window, ktime_t now, uint32_t bytes, uint32_t thresh, uint32_t short_intvl, uint32_t long_intvl)
 {
-	uint32_t delta;
+	uint64_t delta;
 
 	if (!window->burst_data.start) {
 		fls_def_sensor_burst_open(&window->burst_data, now, bytes, thresh);
@@ -293,7 +298,7 @@ static void fls_def_sensor_burst_record(struct fls_def_sensor_window *window, kt
 
 	if (window->burst_data.active) {
 		delta = ktime_sub(now, window->burst_data.last);
-		if (delta >= ms_to_ktime(long_intvl)) {
+		if (delta >= ms_to_ktime(long_intvl)) {	
 			fls_def_sensor_burst_close(window);
 			fls_def_sensor_burst_open(&window->burst_data, now, bytes, thresh);
 			return;
@@ -380,6 +385,7 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 
 	if(conn->externalrule) {
 		now = skb->tstamp;
+		skb->len -= 14;
 	} else {
 		now = ktime_get_boottime();
 	}
@@ -482,21 +488,13 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 
 		if (fls_def_sensor_burst) {
 			fls_def_sensor_burst_close(&conn->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG]);
+			if (conn->reverse) {
+				fls_def_sensor_burst_close(&conn->reverse->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG]);
+			}
 		}
 
 		sample_index += 1;
 		FLS_TRACE("%p increased sample_index to %u", conn, sample_index);
-
-	 	/* XL window (if closed) will be realigned when new sample is created. */
-		if(!conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open) {
-			FLS_TRACE("%p Open and reaglign XL window to now \n", conn);
-			conn->stats.isd.xl_sample.sample_start_time = now;
-			conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
-			if (conn->reverse) {
-				conn->reverse->stats.isd.xl_sample.sample_start_time = now;
-				conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
-			}
-		}
 
 		if (sample_index < fls_def_sensor_sample_count) {
 			conn->stats.isd.samples[sample_index].sample_start_time = now;
@@ -516,8 +514,12 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 			 */
 			if (fls_def_sensor_burst) {
 				fls_def_sensor_burst_close(&conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
+				if (conn->reverse) {
+					fls_def_sensor_burst_close(&conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
+				}
+				FLS_TRACE("%px Sending XL window: original burst_cnt = %d, reply_cnt %d\n", conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts,conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
 			}
-			FLS_TRACE("%px Sending XL window with burst_cnt = %d\n", conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
+		
 			fls_def_sensor_event_create(conn, now, true);
 		}
 	}
@@ -575,16 +577,6 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 
 			sample_index = 0;
 			conn->stats.isd.samples[sample_index].sample_start_time = now;
-
-			if(!conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open) {
-				FLS_TRACE("%p Open and reaglign XL window to now \n", conn);
-				conn->stats.isd.xl_sample.sample_start_time = now;
-				conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
-				if(reply) {
-					reply->stats.isd.xl_sample.sample_start_time = now;
-					reply->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
-				}
-			}
 
 			if (reply) {
 				reply->stats.isd.samples[sample_index].sample_start_time = now;
