@@ -93,6 +93,7 @@ bool fls_tm_chardev_enqueue(struct fls_tm_flow *tm_flow)
 {
 	unsigned long irqflags;
 	uint32_t write_index;
+	bool ret = true;
 
 	FLS_TRACE("FLS_TM: enqueue tm ");
 
@@ -104,8 +105,9 @@ bool fls_tm_chardev_enqueue(struct fls_tm_flow *tm_flow)
 		 */
 		memset(msg_log.flow_ring_buf, 0, sizeof(msg_log.flow_ring_buf));
 		msg_log.write_index = 0;
-		spin_unlock_irqrestore(&msg_log.lock, irqflags);
-		return false;
+
+		tm_flow->flags |= FLS_TM_FLAG_RESET;
+		ret = false;
 	}
 
 	write_index = msg_log.write_index;
@@ -119,7 +121,7 @@ bool fls_tm_chardev_enqueue(struct fls_tm_flow *tm_flow)
 		wake_up_interruptible(&chardev.readq);
 	}
 
-	return true;
+	return ret;
 }
 
 void fls_tm_chardev_shutdown(void)

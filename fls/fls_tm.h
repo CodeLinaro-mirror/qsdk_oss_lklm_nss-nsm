@@ -20,6 +20,8 @@
 #include <linux/jiffies.h>
 
 #define FLS_TM_STATS_PUSH_PERIOD msecs_to_jiffies(1000)
+#define FLS_TM_FLAG_BREAK 0x01
+#define FLS_TM_FLAG_RESET 0x02
 
 struct fls_tm_flow {
 	uint32_t src_ip_addr[4];		/* Source Ip Address */
@@ -36,6 +38,7 @@ struct fls_tm_flow {
 	uint64_t ret_pkts;			/* Return Direction Packets */
 	char src_if[IFNAMSIZ];			/* Buffer containing source interface name */
 	char dst_if[IFNAMSIZ];			/* Buffer containing destination interface name */
+	uint8_t flags;				/* Flags used for processing by TM APP */
 };
 
 bool fls_tm_init(void);
