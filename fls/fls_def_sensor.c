@@ -516,8 +516,10 @@ void fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_b
 				fls_def_sensor_burst_close(&conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
 				if (conn->reverse) {
 					fls_def_sensor_burst_close(&conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
+					FLS_TRACE("%px Sending XL window: original burst_cnt = %d, reply_cnt %d\n", conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts,conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
+				} else {
+					FLS_TRACE("%px Sending XL window: original burst_cnt = %d\n", conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
 				}
-				FLS_TRACE("%px Sending XL window: original burst_cnt = %d, reply_cnt %d\n", conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts,conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
 			}
 		
 			fls_def_sensor_event_create(conn, now, true);
