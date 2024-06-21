@@ -308,6 +308,7 @@ void fls_tm_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, c
 	tm_flow->ret_bytes = atomic64_read(&ct_acct->counter[IP_CT_DIR_REPLY].bytes);
 	tm_flow->ret_pkts = atomic64_read(&ct_acct->counter[IP_CT_DIR_REPLY].packets);
 	tm_flow->proto = l4proto->l4proto;
+	tm_flow->flags = 0;
 	fls_tm_print_tm_flow(tm_flow);
 	return;
 
@@ -384,6 +385,7 @@ void fls_tm_push_stats_req_work(struct work_struct *work)
 	 * Breakpoint between seconds
 	 */
 	memset(&tm_flow, 0, sizeof(tm_flow));
+	tm_flow.flags |= FLS_TM_FLAG_BREAK;
 	if (!fls_tm_chardev_enqueue(&tm_flow)) {
 		FLS_INFO("FTM_MSG Dropped");
 	}
