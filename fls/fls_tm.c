@@ -27,7 +27,9 @@
 #include <net/netfilter/nf_conntrack_timestamp.h>
 #include <linux/list_nulls.h>
 #include <linux/rculist_nulls.h>
+#ifdef FLS_ECM_CLASSIFIER_EMESH_ENABLE
 #include <ecm_classifier_emesh_public.h>
+#endif
 #include "fls_tm.h"
 #include "fls_tm_chardev.h"
 #include "fls_debug.h"
@@ -263,10 +265,11 @@ void fls_tm_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, c
 			memset(tm_flow->dst_mac_addr, 0, sizeof(tm_flow->dst_mac_addr));
 		}
 		tm_flow->ip_version = 4;
-		if (!ecm_classifier_emesh_sawf_get_iface_names_ipv4(ct, tm_flow->src_if, tm_flow->dst_if)) {
-			memset(tm_flow->src_if, 0, IFNAMSIZ);
-			memset(tm_flow->dst_if, 0, IFNAMSIZ);
-		}
+		memset(tm_flow->src_if, 0, IFNAMSIZ);
+		memset(tm_flow->dst_if, 0, IFNAMSIZ);
+#ifdef FLS_ECM_CLASSIFIER_EMESH_ENABLE
+		ecm_classifier_emesh_sawf_get_iface_names_ipv4(ct, tm_flow->src_if, tm_flow->dst_if);
+#endif
 		break;
 	case NFPROTO_IPV6:
 		memcpy(tm_flow->src_ip_addr, &tuple->src.u3.ip6, sizeof(uint32_t) * 4);
@@ -281,10 +284,11 @@ void fls_tm_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, c
 			memset(tm_flow->dst_mac_addr, 0, sizeof(tm_flow->dst_mac_addr));
 		}
 		tm_flow->ip_version = 6;
-		if (!ecm_classifier_emesh_sawf_get_iface_names_ipv6(ct, tm_flow->src_if, tm_flow->dst_if)) {
-			memset(tm_flow->src_if, 0, IFNAMSIZ);
-			memset(tm_flow->dst_if, 0, IFNAMSIZ);
-		}
+		memset(tm_flow->src_if, 0, IFNAMSIZ);
+		memset(tm_flow->dst_if, 0, IFNAMSIZ);
+#ifdef FLS_ECM_CLASSIFIER_EMESH_ENABLE
+		ecm_classifier_emesh_sawf_get_iface_names_ipv6(ct, tm_flow->src_if, tm_flow->dst_if);
+#endif
 		break;
 	default:
 		break;
