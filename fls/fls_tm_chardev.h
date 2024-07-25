@@ -19,7 +19,7 @@
 #include <linux/spinlock.h>
 
 #define FLS_TM_CHARDEV_NAME "fls_tm"
-#define FLS_TM_CHARDEV_MSG_MAX 128
+#define FLS_TM_CHARDEV_MSG_MAX 256
 #define FLS_TM_CHARDEV_MSG_MASK (FLS_TM_CHARDEV_MSG_MAX - 1)
 
 struct fls_msg_log {
