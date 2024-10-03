@@ -20,7 +20,7 @@
 #define __FLS_DEBUG_H
 
 #include "fls_conn.h"
-#include "fls_chardev.h"
+#include "fls_rfs.h"
 
 enum fls_debug_level {
 	FLS_DEBUG_LEVEL_NONE,
