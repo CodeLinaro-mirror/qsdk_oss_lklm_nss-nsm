@@ -137,7 +137,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, boo
 		reverse = conn;
 	}
 
-	event.event_type = isXL? FLS_CHARDEV_EVENT_TYPE_XL : FLS_CHARDEV_EVENT_TYPE_DEF;
+	event.event_type = isXL? FLS_RFS_EVENT_TYPE_XL : FLS_RFS_EVENT_TYPE_DEF;
 	event.dir = 0xEB;
 	event.ip_version = conn->ip_version;
 	event.protocol = conn->protocol;
@@ -180,11 +180,11 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, boo
 		//Reset the start time for the next XL event.
 		orig->stats.isd.xl_sample.sample_start_time = time;
 		reverse->stats.isd.xl_sample.sample_start_time = time;
-		
+
 		event.def_event.window_length[0] = fls_def_sensor_xl_window;
 		event.def_event.sample_count = 1;
 
-		if (sendevent && !fls_chardev_enqueue(&event)) {
+		if (sendevent && !fls_rfs_enqueue(&event)) {
 			FLS_WARN("XL Event dropped!\n");
 		}
 		// enable sendevent for XL only.
@@ -210,7 +210,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, boo
 		reverse->stats.isd.samples[i].last_packet_time = 0;
 	}
 
-	if (!fls_chardev_enqueue(&event)) {
+	if (!fls_rfs_enqueue(&event)) {
 		FLS_WARN("Event dropped!\n");
 	}
 }

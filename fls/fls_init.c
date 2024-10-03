@@ -26,7 +26,7 @@
 void __exit fls_exit(void)
 {
 	sfe_fls_unregister();
-	fls_chardev_shutdown();
+	fls_rfs_shutdown();
 	fls_debug_deinit();
 	fls_tm_deinit();
 }
@@ -34,7 +34,7 @@ void __exit fls_exit(void)
 int __init fls_init(void)
 {
 	int err;
-	err = fls_chardev_init();
+	err = fls_rfs_init();
 	if (err) {
 		return err;
 	}
@@ -42,7 +42,7 @@ int __init fls_init(void)
 	fls_conn_tracker_init();
 	if (!fls_def_sensor_init(&fct.fsm)) {
 		FLS_ERROR("Failed to register def sensor.\n");
-		fls_chardev_shutdown();
+		fls_rfs_shutdown();
 		return -1;
 	}
 
