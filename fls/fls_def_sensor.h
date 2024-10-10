@@ -42,9 +42,10 @@ extern uint32_t fls_def_sensor_burst;
 extern uint32_t fls_def_sensor_burst_threshold[FLS_DEF_SENSOR_WINDOWS];
 extern uint32_t fls_def_sensor_burst_short_intvl[FLS_DEF_SENSOR_WINDOWS];
 extern uint32_t fls_def_sensor_burst_long_intvl[FLS_DEF_SENSOR_WINDOWS];
-extern uint32_t fls_def_sensor_xl_sz_threshold;
-extern uint32_t fls_def_sensor_xl_short;
-extern uint32_t fls_def_sensor_xl_long;
+extern uint32_t fls_def_sensor_xxl_sz_threshold;
+extern uint32_t fls_def_sensor_xxl_short;
+extern uint32_t fls_def_sensor_xxl_long;
+extern uint32_t fls_def_sensor_xxl_window;
 extern uint32_t fls_def_sensor_xl_window;
 
 struct fls_def_sensor_burst {
@@ -83,6 +84,7 @@ struct fls_def_sensor_data {
 	struct fls_def_sensor_sample samples[FLS_DEF_SENSOR_MAX_SAMPLE_COUNT];
 	ktime_t first_packet_time;
 	ktime_t event_start_time;
+	struct fls_def_sensor_sample xxl_sample;
 	struct fls_def_sensor_sample xl_sample;
 
 	/* sendevent:
@@ -92,7 +94,7 @@ struct fls_def_sensor_data {
 	 * when receive stop_cmd and if either below is true:
 	 *	stop_forever == false
 	 *	stop_forever == true and max_events == -1.
-	 * sendevent will be reset to true when next XL window event generates.
+	 * sendevent will be reset to true when next XXL window event generates.
 	 */
 	bool sendevent;
 

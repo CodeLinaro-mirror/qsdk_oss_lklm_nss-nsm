@@ -148,30 +148,30 @@ static struct ctl_table fls_debug_table[] = {
 		.proc_handler	= &proc_dointvec
 	},
 	{
-		.procname	= "xl_sz_threshold",
-		.data		= &fls_def_sensor_xl_sz_threshold,
-		.maxlen		= sizeof(fls_def_sensor_xl_sz_threshold),
+		.procname	= "xxl_sz_threshold",
+		.data		= &fls_def_sensor_xxl_sz_threshold,
+		.maxlen		= sizeof(fls_def_sensor_xxl_sz_threshold),
 		.mode		= 0644,
 		.proc_handler	= &proc_douintvec,
 	},
 	{
-		.procname	= "xl_short",
-		.data		= &fls_def_sensor_xl_short,
-		.maxlen		= sizeof(fls_def_sensor_xl_short),
+		.procname	= "xxl_short",
+		.data		= &fls_def_sensor_xxl_short,
+		.maxlen		= sizeof(fls_def_sensor_xxl_short),
 		.mode		= 0644,
 		.proc_handler	= &proc_douintvec,
 	},
 	{
-		.procname	= "xl_long",
-		.data		= &fls_def_sensor_xl_long,
-		.maxlen		= sizeof(fls_def_sensor_xl_long),
+		.procname	= "xxl_long",
+		.data		= &fls_def_sensor_xxl_long,
+		.maxlen		= sizeof(fls_def_sensor_xxl_long),
 		.mode		= 0644,
 		.proc_handler	= &proc_douintvec,
 	},
 	{
-		.procname	= "xl_window",
-		.data		= &fls_def_sensor_xl_window,
-		.maxlen		= sizeof(fls_def_sensor_xl_window),
+		.procname	= "xxl_window",
+		.data		= &fls_def_sensor_xxl_window,
+		.maxlen		= sizeof(fls_def_sensor_xxl_window),
 		.mode		= 0644,
 		.proc_handler	= &proc_douintvec,
 	},
@@ -181,6 +181,13 @@ static struct ctl_table fls_debug_table[] = {
 		.maxlen		= sizeof(fls_conn_timeout),
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec
+	},
+	{
+		.procname	= "xl_window",
+		.data		= &fls_def_sensor_xl_window,
+		.maxlen		= sizeof(fls_def_sensor_xl_window),
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec,
 	},
 	{ }
 };
@@ -224,7 +231,7 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 				if(conn->reverse)
 					conn->reverse->stats.isd.sendevent = false;
 				if (fls_def_sensor_max_events != -1 && fls_def_sensor_stop_forever)  {
-					FLS_TRACE("Lookup succeed! Stop XL collection (FOREVER).");
+					FLS_TRACE("Lookup succeed! Stop XXL collection (FOREVER).");
 					conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 					if (conn->reverse) {
 						conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
@@ -232,7 +239,7 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 					spin_unlock(&fls_conn_lock);
 					return count;
 				}
-				FLS_TRACE("Lookup succeed! Stop XL collection (For this epoch).");
+				FLS_TRACE("Lookup succeed! Stop XXL collection (For this epoch).");
 			} else {
 				FLS_TRACE("Lookup failed!\n");
 			}

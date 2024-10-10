@@ -48,7 +48,9 @@ struct fls_rfs {
 
 enum fls_rfs_event_types {
 	FLS_RFS_EVENT_TYPE_DEF,
-	FLS_RFS_EVENT_TYPE_XL /* Extra large window event type */
+	FLS_RFS_EVENT_TYPE_XL, /* X large window event type */
+	FLS_RFS_EVENT_TYPE_XXL, /* XL large window event type */
+
 };
 
 struct fls_def_event_window {
