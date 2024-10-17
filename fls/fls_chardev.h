@@ -23,30 +23,6 @@
 #include <linux/types.h>
 #include "fls_def_sensor.h"
 
-enum FLS_CMD_TYPE {
-	FLS_CHARDEV_FLUSH,
-	FLS_CHARDEV_EVENT,
-	FLS_CHARDEV_RESULT
-};
-
-struct fls_cmdinfo {
-	uint8_t cmd;
-	uint8_t version;
-	uint32_t src_ip[4];
-	uint32_t dst_ip[4];
-	uint16_t src_port;
-	uint16_t dst_port;
-	uint8_t protocol;
-	union fls_data {
-		struct packetinfo{
-			uint32_t packet_size;
-			uint32_t timestamp_sec;
-			long timestamp_nsec;
-		} fls_packetinfo;
-		uint8_t classid;
-	} data;
-};
-
 struct fls_chardev {
 	struct cdev cdev;
 	struct class *cl;

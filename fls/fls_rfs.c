@@ -31,8 +31,6 @@
 #include "fls_rfs.h"
 #include "fls_conn.h"
 
-DEFINE_SPINLOCK(fls_conn_lock);
-
 struct fls_event_log {
 	uint32_t read_index;
 	uint32_t write_index;
