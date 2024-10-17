@@ -18,6 +18,7 @@
 
 #include <linux/sysctl.h>
 #include <linux/net.h>
+#include <linux/proc_fs.h>
 #include "fls_debug.h"
 
 #define FLS_DEBUG_LEVEL_DEFAULT FLS_DEBUG_LEVEL_ERROR
@@ -30,6 +31,9 @@ static uint32_t fls_debug_sample_count_max = FLS_DEF_SENSOR_MAX_SAMPLE_COUNT;
 static uint32_t fls_debug_bool_min = 0;
 static uint32_t fls_debug_bool_max = 1;
 static struct ctl_table_header *fls_debug_header;
+static struct proc_dir_entry *pentry;
+
+DEFINE_SPINLOCK(fls_conn_lock);
 
 static struct ctl_table fls_debug_table[] = {
 	{
@@ -169,7 +173,7 @@ static struct ctl_table fls_debug_table[] = {
 		.maxlen		= sizeof(fls_def_sensor_xl_window),
 		.mode		= 0644,
 		.proc_handler	= &proc_douintvec,
-	},
+},
 	{
 		.procname	= "conn_timeout",
 		.data		= &fls_conn_timeout,
@@ -178,6 +182,69 @@ static struct ctl_table fls_debug_table[] = {
 		.proc_handler	= &proc_dointvec
 	},
 	{ }
+};
+
+static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, size_t length, loff_t *ppos)
+{
+	int count;
+	struct fls_cmdinfo packetinfo;
+	struct fls_conn *conn;
+
+	count = min(length, sizeof(struct fls_cmdinfo));
+	if (copy_from_user((char*)&packetinfo, buffer, count)) {
+		FLS_ERROR("copy from user failed.\n");
+		return -EFAULT;
+	}
+
+	switch (packetinfo.cmd) {
+		case FLS_PFS_RESULT:
+			FLS_TRACE("\nFLS: Receive stop command.\n");
+			spin_lock(&fls_conn_lock);
+			conn = fls_conn_lookup(packetinfo.version, packetinfo.protocol,
+						packetinfo.src_ip,
+						packetinfo.src_port,
+						packetinfo.dst_ip,
+						packetinfo.dst_port);
+			if(conn) {
+				conn->stats.isd.sendevent = false;
+				if(conn->reverse)
+					conn->reverse->stats.isd.sendevent = false;
+				if (fls_def_sensor_max_events != -1 && fls_def_sensor_stop_forever)  {
+					FLS_TRACE("Lookup succeed! Stop XL collection (FOREVER).");
+					conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+					if (conn->reverse) {
+						conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+					}
+					spin_unlock(&fls_conn_lock);
+					return count;
+				}
+				FLS_TRACE("Lookup succeed! Stop XL collection (For this epoch).");
+			} else {
+				FLS_TRACE("Lookup failed!\n");
+			}
+
+			spin_unlock(&fls_conn_lock);
+			return count;
+
+		case FLS_PFS_EVENT:
+			FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
+			return 0;
+
+		case FLS_PFS_FLUSH:
+			FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
+			return 0;
+
+		default:
+			FLS_ERROR("Unrecognized command %d.\n", packetinfo.cmd);
+			return 0;
+	}
+
+	return count;
+}
+
+static const struct proc_ops fls_pfsops = {
+	.proc_write = fls_pfsops_write,
+	.proc_read = seq_read,
 };
 
 static int fls_conn_ipv4_sprint(uint32_t addr, char *str, size_t len)
@@ -274,6 +341,7 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 
 void fls_debug_deinit(void)
 {
+	proc_remove(pentry);
 	if (fls_debug_header) {
 		unregister_sysctl_table(fls_debug_header);
 	}
@@ -281,9 +349,14 @@ void fls_debug_deinit(void)
 
 void fls_debug_init(void)
 {
+	pentry = proc_create("fls_cmd", 0644, NULL, &fls_pfsops);
+    	if (!pentry) {
+		FLS_ERROR("Failed to register fls procfs cmd file\n");
+	}
+
 	fls_debug_level_current = FLS_DEBUG_LEVEL_DEFAULT;
 	fls_debug_header = register_sysctl("net/fls", fls_debug_table);
 	if (!fls_debug_header) {
-		printk("Failed to register fls sysctl table.\n");
+		FLS_ERROR("Failed to register fls sysctl table.\n");
 	}
 }
