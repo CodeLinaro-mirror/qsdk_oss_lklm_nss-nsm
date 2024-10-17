@@ -22,6 +22,30 @@
 #include "fls_conn.h"
 #include "fls_rfs.h"
 
+enum FLS_PFS_CMD_TYPE {
+	FLS_PFS_FLUSH,
+	FLS_PFS_EVENT,
+	FLS_PFS_RESULT
+};
+
+struct fls_cmdinfo {
+	uint8_t cmd;
+	uint8_t version;
+	uint32_t src_ip[4];
+	uint32_t dst_ip[4];
+	uint16_t src_port;
+	uint16_t dst_port;
+	uint8_t protocol;
+	union fls_data {
+		struct packetinfo{
+			uint32_t packet_size;
+			uint32_t timestamp_sec;
+			long timestamp_nsec;
+		} fls_packetinfo;
+		uint8_t classid;
+	} data;
+};
+
 enum fls_debug_level {
 	FLS_DEBUG_LEVEL_NONE,
 	FLS_DEBUG_LEVEL_ERROR,
