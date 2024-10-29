@@ -135,6 +135,7 @@ void fls_tm_chardev_shutdown(void)
 int fls_tm_chardev_init(void)
 {
 	int ret;
+	struct device *dump_dev;
 
 	spin_lock_init(&msg_log.lock);
 	init_waitqueue_head(&chardev.readq);
@@ -151,8 +152,7 @@ int fls_tm_chardev_init(void)
 	ret = cdev_add(&chardev.cdev, chardev.devid, 1);
 	if (ret) {
 		FLS_ERROR("Failed to add fls device: %d\n", ret);
-		unregister_chrdev_region(chardev.devid, 1);
-		return ret;
+		goto fail1;
 	}
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0))
@@ -160,9 +160,29 @@ int fls_tm_chardev_init(void)
 #else
 	chardev.cl = class_create(FLS_TM_CHARDEV_NAME);
 #endif
-	device_create(chardev.cl, NULL, chardev.devid, NULL, FLS_TM_CHARDEV_NAME);
+	if (IS_ERR(chardev.cl)) {
+		ret = PTR_ERR(chardev.cl);
+		FLS_ERROR("Unable to create dump class = %d\n", ret);
+		goto fail2;
+	}
+
+	dump_dev = device_create(chardev.cl, NULL, chardev.devid, NULL, FLS_TM_CHARDEV_NAME);
+	if (IS_ERR(dump_dev)) {
+		ret = PTR_ERR(dump_dev);
+		FLS_ERROR("Unable to create a device err = %d\n", ret);
+		goto fail3;
+	}
 
 	memset(msg_log.flow_ring_buf, 0, sizeof(msg_log.flow_ring_buf));
 
 	return 0;
+
+fail3:
+	class_destroy(chardev.cl);
+fail2:
+	cdev_del(&chardev.cdev);
+fail1:
+	unregister_chrdev_region(chardev.devid, 1);
+
+	return ret;
 }
