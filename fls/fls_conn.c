@@ -184,10 +184,42 @@ struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 }
 EXPORT_SYMBOL(fls_conn_lookup);
 
+static void fls_conn_free_cmn(struct fls_conn *conn)
+{
+	/*
+	 * Kill any active timers
+	 */
+	fls_def_sensor_timer_delete(conn);
+
+	if (conn->cmn->timers->delay_timer)
+		kfree(conn->cmn->timers->delay_timer);
+
+	if (conn->cmn->timers->window_timer)
+		kfree(conn->cmn->timers->window_timer);
+
+	if (conn->cmn->timers->xl_xxl_timer)
+		kfree(conn->cmn->timers->xl_xxl_timer);
+
+	if (conn->cmn->timers)
+		kfree(conn->cmn->timers);
+
+	if (conn->cmn)
+		kfree(conn->cmn);
+
+	conn->cmn = NULL;
+	conn->reverse->cmn = NULL;
+
+}
+
 void fls_conn_delete_internal(void *conn)
 {
 	struct fls_conn *connection = (struct fls_conn *)conn;
 	struct fls_conn *reply = connection->reverse;
+
+	if (connection->cmn) {
+		fls_conn_free_cmn(connection);
+	}
+
 	if (reply) {
 		reply->reverse = NULL;
 	}
@@ -293,6 +325,51 @@ bool fls_conn_delete_timeout(ktime_t now, s64 threshold) {
 }
 
 /*
+ * fls_conn_alloc_cmn
+ *	Dynamically allocates timers for each connection
+ */
+struct fls_conn_cmn *fls_conn_alloc_cmn(void)
+{
+	struct fls_conn_cmn *cmn;
+
+	cmn = kmalloc(sizeof(struct fls_conn_cmn), GFP_ATOMIC);
+	if (!cmn) {
+		FLS_WARN("failed to alloc common stats\n");
+		return NULL;
+	}
+
+	cmn->timers = kmalloc(sizeof(struct fls_def_sensor_timers), GFP_ATOMIC);
+	if (!cmn->timers) {
+		FLS_WARN("failed to alloc timers struct\n");
+		return NULL;
+	}
+
+	cmn->timers->delay_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
+	if (!cmn->timers->delay_timer) {
+		FLS_WARN("failed to alloc delay timer struct\n");
+		return NULL;
+	}
+	cmn->timers->delay_timer->cmn = cmn;
+
+	cmn->timers->window_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
+	if (!cmn->timers->window_timer) {
+		FLS_WARN("failed to alloc window timer struct\n");
+		return NULL;
+	}
+	cmn->timers->window_timer->cmn = cmn;
+
+	cmn->timers->xl_xxl_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
+	if (!cmn->timers->xl_xxl_timer) {
+		FLS_WARN("failed to alloc xl timer struct\n");
+		return NULL;
+	}
+	cmn->timers->xl_xxl_timer->cmn = cmn;
+
+	return cmn;
+}
+
+
+/*
  * fls_conn_create_bidiflow()
  *	Creates a bidirectional flow in the connection database.
  */
@@ -305,8 +382,16 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 						bool isexternal, ktime_t last_ts) {
 	struct fls_conn *orig;
 	struct fls_conn *reply;
+	struct fls_conn_cmn *cmn;
+
+	cmn = fls_conn_alloc_cmn();
+	if (!cmn) {
+		return NULL;
+	}
+
 	orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
 	if (!orig && !isexternal) {
+		kfree(cmn);
 		return NULL;
 	}
 
@@ -314,6 +399,7 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 		if(fls_conn_delete_timeout(last_ts, fls_conn_timeout)){
 			orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
 		} else {
+			kfree(cmn);
 			return NULL;
 		}
 	}
@@ -348,6 +434,15 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 	reply->reverse = orig;
 	orig->dir = FLS_CONN_DIRECTION_ORIG;
 	reply->dir = FLS_CONN_DIRECTION_RET;
+
+	/*
+	 * Initialize event timers for common data
+	 */
+	fls_def_sensor_timer_init(cmn->timers);
+	cmn->orig = orig;
+	cmn->reply = reply;
+	orig->cmn = cmn;
+	reply->cmn = cmn;
 
 	return orig;
 }

@@ -15,6 +15,15 @@
 #define FLS_DEF_SENSOR_WINDOWS 3
 #define FLS_DEF_SENSOR_WINDOW_LG (FLS_DEF_SENSOR_WINDOWS - 1)
 #define FLS_DEF_SENSOR_TOTAL_TIME (fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_LG] * fls_def_sensor_sample_count)
+#define FLS_DEF_SENSOR_WINDOW_FLAG_SM 0x01
+#define FLS_DEF_SENSOR_WINDOW_FLAG_MD 0x02
+#define FLS_DEF_SENSOR_WINDOW_FLAG_LG 0x04
+
+#ifdef FLS_DEF_SENSOR_WINDOW_SMALL
+#define FLS_DEF_SENSOR_WINDOW_MIN 0
+#else
+#define FLS_DEF_SENSOR_WINDOW_MIN FLS_DEF_SENSOR_WINDOW_LG - 1
+#endif
 
 extern uint32_t fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOWS];
 extern uint32_t fls_def_sensor_delay;
@@ -34,6 +43,7 @@ extern uint32_t fls_def_sensor_xxl_short;
 extern uint32_t fls_def_sensor_xxl_long;
 extern uint32_t fls_def_sensor_xxl_window;
 extern uint32_t fls_def_sensor_xl_window;
+extern uint32_t fls_def_sensor_sample_freq;
 
 struct fls_def_sensor_burst {
 	bool active;
@@ -67,6 +77,18 @@ struct fls_def_sensor_sample {
 	struct fls_def_sensor_window window[FLS_DEF_SENSOR_WINDOWS];
 };
 
+struct fls_def_sensor_timer_data {
+	struct hrtimer timer;
+	struct fls_conn_cmn *cmn;
+	uint8_t flags;
+};
+
+struct fls_def_sensor_timers {
+	struct fls_def_sensor_timer_data *delay_timer;
+	struct fls_def_sensor_timer_data *window_timer;
+	struct fls_def_sensor_timer_data *xl_xxl_timer;
+};
+
 struct fls_def_sensor_data {
 	struct fls_def_sensor_sample samples[FLS_DEF_SENSOR_MAX_SAMPLE_COUNT];
 	ktime_t first_packet_time;
@@ -97,6 +119,8 @@ struct fls_gro_frag_stats {
 	bool is_gro_skb;		/* skb is gro or not */
 };
 
+void fls_def_sensor_timer_init(struct fls_def_sensor_timers *timers);
+void fls_def_sensor_timer_delete(struct fls_conn *conn);
 bool fls_def_sensor_init(struct fls_sensor_manager *fsm);
 uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb);
 #endif
