@@ -36,6 +36,35 @@ static uint32_t fls_debug_sample_count_max = FLS_DEF_SENSOR_MAX_SAMPLE_COUNT;
 static uint32_t fls_debug_bool_min = 0;
 static uint32_t fls_debug_bool_max = 1;
 
+/*
+ * fls_debug_sample_timer_freq_handler()
+ *	Handler to calculate the timer frequency of fls_def_sensor_sample_timer
+ */
+static int fls_debug_sample_timer_freq_handler(struct ctl_table *table, int write, void __user *buffer, size_t *lenp, loff_t *ppos) {
+	int ret;
+	uint32_t tmp_xl, tmp_xxl, tmp;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+
+	if (write) {
+		/*
+		 * Find greatest common factor using Euclidean method
+		 */
+		tmp_xl = fls_def_sensor_xl_window;
+		tmp_xxl = fls_def_sensor_xxl_window;
+		while(tmp_xxl != 0) {
+			tmp = tmp_xxl;
+			tmp_xxl = tmp_xl % tmp_xxl;
+			tmp_xl = tmp;
+		}
+		fls_def_sensor_sample_freq = tmp_xl;
+
+		FLS_INFO("XL/XXL sample Frequency: %u\n", fls_def_sensor_sample_freq);
+    	}
+
+	return ret;
+}
+
 static struct ctl_table fls_debug_table[] = {
 	{
 		.procname	= "debug",
@@ -173,7 +202,7 @@ static struct ctl_table fls_debug_table[] = {
 		.data		= &fls_def_sensor_xxl_window,
 		.maxlen		= sizeof(fls_def_sensor_xxl_window),
 		.mode		= 0644,
-		.proc_handler	= &proc_douintvec,
+		.proc_handler	= fls_debug_sample_timer_freq_handler,
 	},
 	{
 		.procname	= "conn_timeout",
@@ -187,7 +216,7 @@ static struct ctl_table fls_debug_table[] = {
 		.data		= &fls_def_sensor_xl_window,
 		.maxlen		= sizeof(fls_def_sensor_xl_window),
 		.mode		= 0644,
-		.proc_handler	= &proc_douintvec,
+		.proc_handler	= fls_debug_sample_timer_freq_handler,
 	},
 	{ }
 };
