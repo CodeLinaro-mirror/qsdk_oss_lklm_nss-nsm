@@ -19,11 +19,11 @@
 #include <net/netfilter/nf_conntrack.h>
 #include <linux/jiffies.h>
 
-#define FLS_TM_STATS_PUSH_PERIOD msecs_to_jiffies(1000)
-#define FLS_TM_FLAG_BREAK 0x01
-#define FLS_TM_FLAG_RESET 0x02
+#define FLS_FLOW_STATS_PUSH_PERIOD msecs_to_jiffies(1000)
+#define FLS_FLOW_FLAG_BREAK 0x01
+#define FLS_FLOW_FLAG_RESET 0x02
 
-struct fls_tm_flow {
+struct fls_flow_tm {
 	uint32_t src_ip_addr[4];		/* Source Ip Address */
 	uint32_t dst_ip_addr[4];		/* Destination Ip Address */
 	uint16_t src_port;			/* Source Port */
@@ -41,5 +41,21 @@ struct fls_tm_flow {
 	uint8_t flags;				/* Flags used for processing by TM APP */
 };
 
-bool fls_tm_init(void);
-void fls_tm_deinit(void);
+struct fls_flow_udp_clf {
+	uint32_t src_ip_addr[4];	/* Source Ip Address */
+	uint32_t dst_ip_addr[4];	/* Destination Ip Address */
+	uint16_t src_port;		/* Source Port */
+	uint16_t dst_port;		/* Destination Port */
+	uint8_t proto;			/* Protocol */
+	uint8_t ip_version;		/* Ip Version */
+	uint32_t org_dscp;		/* Original direction DSCP */
+	uint32_t ret_dscp;		/* Return direction DSCP */
+	uint64_t org_bytes;		/* Original Direction Bytes */
+	uint64_t ret_bytes;		/* Return Direction Bytes */
+	uint8_t flags;			/* Flags used for processing by TM APP */
+};
+
+extern int udp_clf_enabled;
+
+bool fls_flow_init(void);
+void fls_flow_deinit(void);

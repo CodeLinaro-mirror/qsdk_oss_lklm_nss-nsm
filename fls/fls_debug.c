@@ -20,6 +20,7 @@
 #include <linux/net.h>
 #include <linux/proc_fs.h>
 #include "fls_debug.h"
+#include "fls_flow.h"
 
 #define FLS_DEBUG_LEVEL_DEFAULT FLS_DEBUG_LEVEL_ERROR
 
@@ -173,13 +174,26 @@ static struct ctl_table fls_debug_table[] = {
 		.maxlen		= sizeof(fls_def_sensor_xl_window),
 		.mode		= 0644,
 		.proc_handler	= &proc_douintvec,
-},
+	},
 	{
 		.procname	= "conn_timeout",
 		.data		= &fls_conn_timeout,
 		.maxlen		= sizeof(fls_conn_timeout),
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec
+	},
+	{ }
+};
+
+static struct ctl_table fls_debug_table_udp_clf[] = {
+	{
+		.procname	= "debug",
+		.data		= &fls_debug_level_current,
+		.maxlen		= sizeof(fls_debug_level_current),
+		.extra1		= &fls_debug_level_min,
+		.extra2		= &fls_debug_level_max,
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec_minmax,
 	},
 	{ }
 };
@@ -341,7 +355,10 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 
 void fls_debug_deinit(void)
 {
-	proc_remove(pentry);
+	if (!udp_clf_enabled) {
+		proc_remove(pentry);
+	}
+
 	if (fls_debug_header) {
 		unregister_sysctl_table(fls_debug_header);
 	}
@@ -349,13 +366,21 @@ void fls_debug_deinit(void)
 
 void fls_debug_init(void)
 {
-	pentry = proc_create("fls_cmd", 0644, NULL, &fls_pfsops);
-    	if (!pentry) {
-		FLS_ERROR("Failed to register fls procfs cmd file\n");
+	if (!udp_clf_enabled) {
+		pentry = proc_create("fls_cmd", 0644, NULL, &fls_pfsops);
+		if (!pentry) {
+			FLS_ERROR("Failed to register fls procfs cmd file\n");
+		}
 	}
 
 	fls_debug_level_current = FLS_DEBUG_LEVEL_DEFAULT;
-	fls_debug_header = register_sysctl("net/fls", fls_debug_table);
+
+	if (!udp_clf_enabled) {
+		fls_debug_header = register_sysctl("net/fls", fls_debug_table);
+	} else {
+		fls_debug_header = register_sysctl("net/fls", fls_debug_table_udp_clf);
+	}
+
 	if (!fls_debug_header) {
 		FLS_ERROR("Failed to register fls sysctl table.\n");
 	}

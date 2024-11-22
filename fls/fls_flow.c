@@ -30,19 +30,19 @@
 #ifdef FLS_ECM_CLASSIFIER_EMESH_ENABLE
 #include <ecm_classifier_emesh_public.h>
 #endif
-#include "fls_tm.h"
-#include "fls_tm_chardev.h"
+#include "fls_flow.h"
+#include "fls_chardev.h"
 #include "fls_debug.h"
 
-struct delayed_work fls_tm_work;
-struct workqueue_struct *fls_tm_workqueue;
+struct delayed_work fls_flow_work;
+struct workqueue_struct *fls_flow_workqueue;
 unsigned int bucket;
 
 /*
- * fls_tm_get_neigh_ipv4
+ * fls_flow_get_neigh_ipv4
  *	Returns neighbor reference for a given IPV4 address
  */
-struct neighbour *fls_tm_get_neigh_ipv4(uint32_t ip_addr)
+struct neighbour *fls_flow_get_neigh_ipv4(uint32_t ip_addr)
 {
 	struct neighbour *neigh;
 	struct rtable *rt;
@@ -84,10 +84,10 @@ struct neighbour *fls_tm_get_neigh_ipv4(uint32_t ip_addr)
 }
 
 /*
- * fls_tm_get_macaddr_ipv4()
+ * fls_flow_get_macaddr_ipv4()
  * 	Return the hardware (MAC) address of the given IPv4 address, if any.
  */
-int fls_tm_get_macaddr_ipv4(uint32_t ip_addr, uint8_t *mac_addr)
+int fls_flow_get_macaddr_ipv4(uint32_t ip_addr, uint8_t *mac_addr)
 {
 	struct neighbour *neigh;
 
@@ -102,7 +102,7 @@ int fls_tm_get_macaddr_ipv4(uint32_t ip_addr, uint8_t *mac_addr)
 	/*
 	 * retrieve the neighbour
 	 */
-	neigh = fls_tm_get_neigh_ipv4(ip_addr);
+	neigh = fls_flow_get_neigh_ipv4(ip_addr);
 	if (!neigh) {
 		FLS_INFO("neighbour lookup failed for IP:0x%x\n", ip_addr);
 		return -ENODEV;
@@ -133,10 +133,10 @@ fail:
 }
 
 /*
- * fls_tm_get_neigh_ipv6()
+ * fls_flow_get_neigh_ipv6()
  *	Returns neighbor reference for a given IPV6 address
  */
-static struct neighbour *fls_tm_get_neigh_ipv6(uint32_t ip_addr[4])
+static struct neighbour *fls_flow_get_neigh_ipv6(uint32_t ip_addr[4])
 {
 	struct neighbour *neigh;
 	struct dst_entry *dst;
@@ -170,10 +170,10 @@ static struct neighbour *fls_tm_get_neigh_ipv6(uint32_t ip_addr[4])
 }
 
 /*
- * fls_tm_get_macaddr_ipv6
+ * fls_flow_get_macaddr_ipv6
  * 	Return the hardware (MAC) address of the given ipv6 address, if any.
  */
-static int fls_tm_get_macaddr_ipv6(uint32_t ip_addr[4], uint8_t mac_addr[])
+static int fls_flow_get_macaddr_ipv6(uint32_t ip_addr[4], uint8_t mac_addr[])
 {
 	struct neighbour *neigh;
 	struct in6_addr addr;
@@ -193,7 +193,7 @@ static int fls_tm_get_macaddr_ipv6(uint32_t ip_addr[4], uint8_t mac_addr[])
 	/*
 	 * retrieve the neighbour
 	 */
-	neigh = fls_tm_get_neigh_ipv6(ip_addr);
+	neigh = fls_flow_get_neigh_ipv6(ip_addr);
 	if (!neigh) {
 		FLS_INFO("neighbour lookup failed for %pI6c\n", ip_addr);
 		return -ENODEV;
@@ -224,11 +224,31 @@ fail:
 }
 
 /*
- * fls_tm_print_tm_flow;
+ * fls_flow_print_udp_clf_flow
+ *	Print characteristics of singular udp_clf flow
+ */
+void fls_flow_print_udp_clf_flow(struct fls_flow_udp_clf *udp_clf_flow)
+{
+	if (udp_clf_flow->ip_version == 4) {
+		FLS_TRACE("\nsrc=%pI4 dst=%pI4 ",
+			&udp_clf_flow->src_ip_addr[0], &udp_clf_flow->dst_ip_addr[0]);
+	} else {
+		FLS_TRACE("\nsrc=%pI6 dst=%pI6 ",
+			&udp_clf_flow->src_ip_addr, &udp_clf_flow->dst_ip_addr);
+	}
+	FLS_TRACE("sport=%hu dport=%hu org_dscp=%hu ret_dscp=%hu\n protocol=%u org_bytes=%u ret_bytes=%u \n",
+		ntohs(udp_clf_flow->src_port), ntohs(udp_clf_flow->dst_port),
+		ntohs(udp_clf_flow->org_dscp), ntohs(udp_clf_flow->ret_dscp),
+		udp_clf_flow->proto,
+		udp_clf_flow->org_bytes,
+		udp_clf_flow->ret_bytes);
+}
+
+/*
+ * fls_flow_print_tm_flow;
  *	Print characteristics of singular tm flow
  */
-
-void fls_tm_print_tm_flow(struct fls_tm_flow *tm_flow)
+void fls_flow_print_tm_flow(struct fls_flow_tm *tm_flow)
 {
 	if (tm_flow->ip_version == 4) {
 		FLS_TRACE("\nsrc=%pI4 dst=%pI4 ",
@@ -246,10 +266,54 @@ void fls_tm_print_tm_flow(struct fls_tm_flow *tm_flow)
 }
 
 /*
- * fls_tm_fill_tm_flow
- *	Fill one flow message to be sent to FTM via character device
+ * fls_flow_fill_udp_clf_flow
+ *	Fill one flow message to be sent to udp_clf via character device
  */
-void fls_tm_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, const struct nf_conntrack_l4proto *l4proto, struct nf_conn_acct *ct_acct, struct fls_tm_flow *tm_flow)
+int fls_flow_fill_udp_clf_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, const struct nf_conntrack_l4proto *l4proto, struct nf_conn_acct *ct_acct, struct fls_flow_udp_clf *udp_clf_flow)
+{
+	int ret = 1;
+
+	switch (tuple->src.l3num) {
+	case NFPROTO_IPV4:
+		udp_clf_flow->src_ip_addr[0] = tuple->src.u3.ip;
+		udp_clf_flow->dst_ip_addr[0] = tuple->dst.u3.ip;
+		udp_clf_flow->ip_version = 4;
+		break;
+
+	case NFPROTO_IPV6:
+		memcpy(udp_clf_flow->src_ip_addr, &tuple->src.u3.ip6, sizeof(uint32_t) * 4);
+		memcpy(udp_clf_flow->dst_ip_addr, &tuple->dst.u3.ip6, sizeof(uint32_t) * 4);
+		udp_clf_flow->ip_version = 6;
+		break;
+	default:
+		break;
+	}
+
+#ifdef FLS_ECM_CLASSIFIER_EMESH_ENABLE
+	ret = ecm_classifier_emesh_sawf_get_connection_info(ct, &udp_clf_flow->org_dscp, &udp_clf_flow->ret_dscp);
+#endif
+	if (!ret) {
+		FLS_TRACE("FLS_UDP_CLF no connection info for flow message\n");
+		return 0;
+	}
+
+	udp_clf_flow->src_port = tuple->src.u.udp.port;
+	udp_clf_flow->dst_port = tuple->dst.u.udp.port;
+
+	udp_clf_flow->org_bytes = atomic64_read(&ct_acct->counter[IP_CT_DIR_ORIGINAL].bytes);
+	udp_clf_flow->ret_bytes = atomic64_read(&ct_acct->counter[IP_CT_DIR_REPLY].bytes);
+	udp_clf_flow->proto = l4proto->l4proto;
+	udp_clf_flow->flags = 0;
+	fls_flow_print_udp_clf_flow(udp_clf_flow);
+
+	return 1;
+}
+
+/*
+ * fls_flow_fill_tm_flow
+ *	Fill one flow message to be sent to FLS CMN via character device
+ */
+void fls_flow_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, const struct nf_conntrack_l4proto *l4proto, struct nf_conn_acct *ct_acct, struct fls_flow_tm *tm_flow)
 {
 	switch (tuple->src.l3num) {
 	case NFPROTO_IPV4:
@@ -258,10 +322,10 @@ void fls_tm_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, c
 		/*
 		 * If we fail to get mac fill with 0 to avoid unexpected behavior
 		 */
-		if (fls_tm_get_macaddr_ipv4(tm_flow->src_ip_addr[0], tm_flow->src_mac_addr)) {
+		if (fls_flow_get_macaddr_ipv4(tm_flow->src_ip_addr[0], tm_flow->src_mac_addr)) {
 			memset(tm_flow->src_mac_addr, 0, sizeof(tm_flow->src_mac_addr));
 		}
-		if (fls_tm_get_macaddr_ipv4(tm_flow->dst_ip_addr[0], tm_flow->dst_mac_addr)) {
+		if (fls_flow_get_macaddr_ipv4(tm_flow->dst_ip_addr[0], tm_flow->dst_mac_addr)) {
 			memset(tm_flow->dst_mac_addr, 0, sizeof(tm_flow->dst_mac_addr));
 		}
 		tm_flow->ip_version = 4;
@@ -277,10 +341,10 @@ void fls_tm_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, c
 		/*
 		 * If we fail to get mac fill with 0 to avoid unexpected behavior
 		 */
-		if (fls_tm_get_macaddr_ipv6(tm_flow->src_ip_addr, tm_flow->src_mac_addr)) {
+		if (fls_flow_get_macaddr_ipv6(tm_flow->src_ip_addr, tm_flow->src_mac_addr)) {
 			memset(tm_flow->src_mac_addr, 0, sizeof(tm_flow->src_mac_addr));
 		}
-		if (fls_tm_get_macaddr_ipv6(tm_flow->dst_ip_addr, tm_flow->dst_mac_addr)) {
+		if (fls_flow_get_macaddr_ipv6(tm_flow->dst_ip_addr, tm_flow->dst_mac_addr)) {
 			memset(tm_flow->dst_mac_addr, 0, sizeof(tm_flow->dst_mac_addr));
 		}
 		tm_flow->ip_version = 6;
@@ -313,16 +377,14 @@ void fls_tm_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, c
 	tm_flow->ret_pkts = atomic64_read(&ct_acct->counter[IP_CT_DIR_REPLY].packets);
 	tm_flow->proto = l4proto->l4proto;
 	tm_flow->flags = 0;
-	fls_tm_print_tm_flow(tm_flow);
-	return;
-
+	fls_flow_print_tm_flow(tm_flow);
 }
 
 /*
- * fls_tm_push_stats_req_work
+ * fls_flow_push_stats_req_work
  *	Worker Function to Push Stats to Userspace Periodically
  */
-void fls_tm_push_stats_req_work(struct work_struct *work)
+void fls_flow_push_stats_req_work(struct work_struct *work)
 {
 	int i;
 	struct nf_conn *ct;
@@ -331,10 +393,11 @@ void fls_tm_push_stats_req_work(struct work_struct *work)
 	struct hlist_nulls_node *n;
 	struct nf_conntrack_tuple *tuple;
 	const struct nf_conntrack_l4proto *l4proto;
-	struct fls_tm_flow tm_flow;
+	struct fls_flow_tm tm_flow;
+	struct fls_flow_udp_clf udp_clf_flow;
 	spinlock_t *lockp;
 
-	FLS_TRACE("FLS_TM Workqueue Called\n");
+	FLS_TRACE("FLS_FLOW Workqueue Called\n");
 
 	/*
 	 * Iterate through nf_conntrack entries
@@ -365,9 +428,17 @@ void fls_tm_push_stats_req_work(struct work_struct *work)
 				FLS_TRACE("Connection: %p has invalid IP address", ct);
 				continue;
 			}
-			if (l4proto->l4proto != IPPROTO_TCP && l4proto->l4proto != IPPROTO_UDP) {
-				FLS_TRACE("Connection: %p isn't TCP or UDP", ct);
-				continue;
+
+			if (!udp_clf_enabled) {
+				if (l4proto->l4proto != IPPROTO_TCP && l4proto->l4proto != IPPROTO_UDP) {
+					FLS_TRACE("Connection: %p isn't TCP or UDP", ct);
+					continue;
+				}
+			} else {
+				if (l4proto->l4proto != IPPROTO_UDP) {
+					FLS_TRACE("Connection: %p isn't UDP", ct);
+					continue;
+				}
 			}
 
 			ct_acct = nf_conn_acct_find(ct);
@@ -376,11 +447,23 @@ void fls_tm_push_stats_req_work(struct work_struct *work)
 				continue;
 			}
 
-			fls_tm_fill_tm_flow(ct, tuple, l4proto, ct_acct, &tm_flow);
+			if (!udp_clf_enabled) {
+				fls_flow_fill_tm_flow(ct, tuple, l4proto, ct_acct, &tm_flow);
 
-			if (!fls_tm_chardev_enqueue(&tm_flow)) {
-				FLS_INFO("FTM_MSG Dropped");
+				if (!fls_chardev_enqueue(&tm_flow)) {
+					FLS_INFO("FTM_MSG Dropped");
+				}
+			} else {
+				if (!fls_flow_fill_udp_clf_flow(ct, tuple, l4proto, ct_acct, &udp_clf_flow)) {
+					FLS_WARN("Unable to get connection info:%p \n", ct);
+					continue;
+				}
+
+				if (!fls_chardev_enqueue(&udp_clf_flow)) {
+					FLS_INFO("FLS UDP_CLF MSG Dropped");
+				}
 			}
+
 		}
 		spin_unlock_bh(lockp);
 	}
@@ -388,47 +471,56 @@ void fls_tm_push_stats_req_work(struct work_struct *work)
 	/*
 	 * Breakpoint between seconds
 	 */
-	memset(&tm_flow, 0, sizeof(tm_flow));
-	tm_flow.flags |= FLS_TM_FLAG_BREAK;
-	if (!fls_tm_chardev_enqueue(&tm_flow)) {
-		FLS_INFO("FTM_MSG Dropped");
+	if (!udp_clf_enabled) {
+		memset(&tm_flow, 0, sizeof(tm_flow));
+		tm_flow.flags |= FLS_FLOW_FLAG_BREAK;
+		if (!fls_chardev_enqueue(&tm_flow)) {
+			FLS_INFO("FTM_MSG Dropped");
+		}
+	} else {
+		memset(&udp_clf_flow, 0, sizeof(udp_clf_flow));
+		udp_clf_flow.flags |= FLS_FLOW_FLAG_BREAK;
+		if (!fls_chardev_enqueue(&udp_clf_flow)) {
+			FLS_INFO("FLS UDP_CLF MSG Dropped");
+		}
 	}
 
-	queue_delayed_work(fls_tm_workqueue, &fls_tm_work, FLS_TM_STATS_PUSH_PERIOD);
+	queue_delayed_work(fls_flow_workqueue, &fls_flow_work, FLS_FLOW_STATS_PUSH_PERIOD);
 }
 
 /*
- * fls_tm_init();
+ * fls_flow_init();
  */
-bool fls_tm_init(void)
+bool fls_flow_init(void)
 {
-	if (fls_tm_chardev_init()) {
+	if (fls_chardev_init()) {
 		return false;
 	}
 	/*
 	 * Create Workqueues
 	 */
-	fls_tm_workqueue = create_singlethread_workqueue("fls_tm_workqueue");
-	if(!fls_tm_workqueue) {
-		FLS_WARN("Failed to initialize FLS TM workqueue\n");
+	fls_flow_workqueue = create_singlethread_workqueue("fls_flow_workqueue");
+	if(!fls_flow_workqueue) {
+		fls_chardev_shutdown();
+		FLS_WARN("Failed to initialize FLS CMN workqueue\n");
 		return false;
 	}
-	INIT_DELAYED_WORK(&fls_tm_work, fls_tm_push_stats_req_work);
-	queue_delayed_work(fls_tm_workqueue, &fls_tm_work, FLS_TM_STATS_PUSH_PERIOD);
-	FLS_TRACE("FLS TM Init Success\n");
+	INIT_DELAYED_WORK(&fls_flow_work, fls_flow_push_stats_req_work);
+	queue_delayed_work(fls_flow_workqueue, &fls_flow_work, FLS_FLOW_STATS_PUSH_PERIOD);
+	FLS_TRACE("FLS CMN Init Success\n");
 
 	return true;
 }
 
 /*
- * fls_tm_deinit()
+ * fls_flow_deinit()
  */
-void fls_tm_deinit(void)
+void fls_flow_deinit(void)
 {
-	fls_tm_chardev_shutdown();
+	fls_chardev_shutdown();
 	/*
 	 * Cancel the push stats req work and destroy workqueues
 	 */
-	cancel_delayed_work_sync(&fls_tm_work);
-	destroy_workqueue(fls_tm_workqueue);
+	cancel_delayed_work_sync(&fls_flow_work);
+	destroy_workqueue(fls_flow_workqueue);
 }

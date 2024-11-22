@@ -16,8 +16,9 @@
  **************************************************************************
  */
 
+#include <linux/types.h>
+
 #include "fls_conn.h"
-#include "fls_chardev.h"
 #include "fls_def_sensor.h"
 #include "fls_debug.h"
 
@@ -253,7 +254,7 @@ static void fls_def_sensor_burst_close(struct fls_def_sensor_window *window)
 	}
 
 	dur = ktime_sub(window->burst_data.last, window->burst_data.start);
-	
+
 	if (window->bursts == 0) {
 		window->burst_dur_sum = dur;
 		window->burst_dur_min = dur;
@@ -298,7 +299,7 @@ static void fls_def_sensor_burst_record(struct fls_def_sensor_window *window, kt
 
 	if (window->burst_data.active) {
 		delta = ktime_sub(now, window->burst_data.last);
-		if (delta >= ms_to_ktime(long_intvl)) {	
+		if (delta >= ms_to_ktime(long_intvl)) {
 			fls_def_sensor_burst_close(window);
 			fls_def_sensor_burst_open(&window->burst_data, now, bytes, thresh);
 			return;
@@ -527,7 +528,7 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 					FLS_TRACE("%px Sending XL window: original burst_cnt = %d\n", conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
 				}
 			}
-		
+
 			fls_def_sensor_event_create(conn, now, true);
 		}
 	}

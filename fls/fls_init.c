@@ -16,39 +16,67 @@
  **************************************************************************
  */
 
+#include "fls_flow.h"
 #include "fls_chardev.h"
 #include "fls_conn.h"
 #include "fls_debug.h"
-#include "fls_tm.h"
 #include <sfe_api.h>
 #include <linux/module.h>
 
+/* Module params */
+int udp_clf_enabled = 0;
+module_param(udp_clf_enabled, int, S_IRUGO);
+MODULE_PARM_DESC(udp_clf_enabled, "enable UDP classifier");
+
 void __exit fls_exit(void)
 {
-	sfe_fls_unregister();
-	fls_rfs_shutdown();
+	fls_flow_deinit();
 	fls_debug_deinit();
-	fls_tm_deinit();
+
+	if (!udp_clf_enabled) {
+		sfe_fls_unregister();
+		fls_rfs_shutdown();
+	}
 }
 
 int __init fls_init(void)
 {
 	int err;
-	err = fls_rfs_init();
-	if (err) {
-		return err;
-	}
 
-	fls_conn_tracker_init();
-	if (!fls_def_sensor_init(&fct.fsm)) {
-		FLS_ERROR("Failed to register def sensor.\n");
-		fls_rfs_shutdown();
+	if (!udp_clf_enabled) {
+
+	/*
+	 * Only FLS with udp_clf is enabled for LM profiles
+	 */
+#ifdef FLS_MEM_PROFILE_LOW
+		FLS_ERROR("Not enabled for LM profile.\n");
 		return -1;
+#endif
+		err = fls_rfs_init();
+		if (err) {
+			return err;
+		}
+
+		fls_conn_tracker_init();
+
+		if (!fls_def_sensor_init(&fct.fsm)) {
+			FLS_ERROR("Failed to register def sensor.\n");
+			fls_rfs_shutdown();
+			return -1;
+		}
+
+		sfe_fls_register(fls_conn_create, fls_conn_delete, fls_conn_stats_update);
 	}
 
 	fls_debug_init();
-	sfe_fls_register(fls_conn_create, fls_conn_delete, fls_conn_stats_update);
-	if (!fls_tm_init()) {
+
+	if (!fls_flow_init()) {
+		fls_debug_deinit();
+
+		if (!udp_clf_enabled) {
+			sfe_fls_unregister();
+			fls_rfs_shutdown();
+		}
 		return -1;
 	}
 	return 0;
