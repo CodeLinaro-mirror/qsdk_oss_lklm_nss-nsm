@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -27,12 +27,27 @@
 static uint32_t fls_debug_level_current;
 static uint32_t fls_debug_level_min = FLS_DEBUG_LEVEL_NONE;
 static uint32_t fls_debug_level_max = FLS_DEBUG_LEVEL_MAX - 1;
+static struct ctl_table_header *fls_debug_header;
+static struct proc_dir_entry *pentry;
+
+static struct ctl_table fls_debug_table_udp_clf[] = {
+	{
+		.procname	= "debug",
+		.data		= &fls_debug_level_current,
+		.maxlen		= sizeof(fls_debug_level_current),
+		.extra1		= &fls_debug_level_min,
+		.extra2		= &fls_debug_level_max,
+		.mode		= 0644,
+		.proc_handler	= &proc_douintvec_minmax,
+	},
+	{ }
+};
+
+#ifndef FLS_MEM_PROFILE_LOW
 static uint32_t fls_debug_sample_count_min = 1;
 static uint32_t fls_debug_sample_count_max = FLS_DEF_SENSOR_MAX_SAMPLE_COUNT;
 static uint32_t fls_debug_bool_min = 0;
 static uint32_t fls_debug_bool_max = 1;
-static struct ctl_table_header *fls_debug_header;
-static struct proc_dir_entry *pentry;
 
 DEFINE_SPINLOCK(fls_conn_lock);
 
@@ -192,19 +207,6 @@ static struct ctl_table fls_debug_table[] = {
 	{ }
 };
 
-static struct ctl_table fls_debug_table_udp_clf[] = {
-	{
-		.procname	= "debug",
-		.data		= &fls_debug_level_current,
-		.maxlen		= sizeof(fls_debug_level_current),
-		.extra1		= &fls_debug_level_min,
-		.extra2		= &fls_debug_level_max,
-		.mode		= 0644,
-		.proc_handler	= &proc_douintvec_minmax,
-	},
-	{ }
-};
-
 static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, size_t length, loff_t *ppos)
 {
 	int count;
@@ -275,15 +277,6 @@ static int fls_conn_ipv4_sprint(uint32_t addr, char *str, size_t len)
 			(addr >> 8) & 0xFF,
 			(addr >> 16) & 0xFF,
 			addr >> 24);
-}
-
-void fls_debug_print(uint32_t level, char *fmt, ...) {
-	va_list args;
-
-	if (level <= fls_debug_level_current) {
-		va_start(args, fmt);
-		vprintk(fmt, args);
-	}
 }
 
 void fls_debug_print_event_info(struct fls_event *event)
@@ -359,11 +352,22 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 		}
 	}
 }
+#endif
+
+void fls_debug_print(uint32_t level, char *fmt, ...) {
+	va_list args;
+
+	if (level <= fls_debug_level_current) {
+		va_start(args, fmt);
+		vprintk(fmt, args);
+	}
+}
 
 void fls_debug_deinit(void)
 {
 	if (!udp_clf_enabled) {
-		proc_remove(pentry);
+		if (pentry)
+			proc_remove(pentry);
 	}
 
 	if (fls_debug_header) {
@@ -373,22 +377,26 @@ void fls_debug_deinit(void)
 
 void fls_debug_init(void)
 {
-	if (!udp_clf_enabled) {
-		pentry = proc_create("fls_cmd", 0644, NULL, &fls_pfsops);
-		if (!pentry) {
-			FLS_ERROR("Failed to register fls procfs cmd file\n");
-		}
-	}
-
 	fls_debug_level_current = FLS_DEBUG_LEVEL_DEFAULT;
 
-	if (!udp_clf_enabled) {
-		fls_debug_header = register_sysctl("net/fls", fls_debug_table);
-	} else {
+	if (udp_clf_enabled) {
 		fls_debug_header = register_sysctl("net/fls", fls_debug_table_udp_clf);
+		if (!fls_debug_header) {
+			FLS_ERROR("Failed to register fls sysctl table.\n");
+		}
+
+		return;
 	}
 
+#ifndef FLS_MEM_PROFILE_LOW
+	pentry = proc_create("fls_cmd", 0644, NULL, &fls_pfsops);
+	if (!pentry) {
+		FLS_ERROR("Failed to register fls procfs cmd file\n");
+	}
+
+	fls_debug_header = register_sysctl("net/fls", fls_debug_table);
 	if (!fls_debug_header) {
 		FLS_ERROR("Failed to register fls sysctl table.\n");
 	}
+#endif
 }

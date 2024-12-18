@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023, 2025, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -18,9 +18,13 @@
 
 #include "fls_flow.h"
 #include "fls_chardev.h"
-#include "fls_conn.h"
 #include "fls_debug.h"
+
+#ifndef FLS_MEM_PROFILE_LOW
+#include "fls_conn.h"
 #include <sfe_api.h>
+#endif
+
 #include <linux/module.h>
 
 /* Module params */
@@ -28,58 +32,72 @@ int udp_clf_enabled = 0;
 module_param(udp_clf_enabled, int, S_IRUGO);
 MODULE_PARM_DESC(udp_clf_enabled, "enable UDP classifier");
 
+static int fls_init_udp_clf(void)
+{
+	fls_debug_init();
+
+	if (!fls_flow_init()) {
+		fls_debug_deinit();
+		return -1;
+	}
+	return 0;
+}
+
+static int fls_init_default(void)
+{
+#ifdef FLS_MEM_PROFILE_LOW
+	FLS_ERROR("Not enabled for LM profile.\n");
+	return -1;
+#else
+	int err;
+
+	err = fls_rfs_init();
+	if (err) {
+		return err;
+	}
+
+	fls_conn_tracker_init();
+
+	if (!fls_def_sensor_init(&fct.fsm)) {
+		FLS_ERROR("Failed to register def sensor.\n");
+		fls_rfs_shutdown();
+		return -1;
+	}
+
+	sfe_fls_register(fls_conn_create, fls_conn_delete, fls_conn_stats_update);
+
+	fls_debug_init();
+
+	if (!fls_flow_init()) {
+		fls_debug_deinit();
+		sfe_fls_unregister();
+		fls_rfs_shutdown();
+		return -1;
+	}
+	return 0;
+#endif
+}
+
 void __exit fls_exit(void)
 {
 	fls_flow_deinit();
 	fls_debug_deinit();
 
 	if (!udp_clf_enabled) {
+#ifndef FLS_MEM_PROFILE_LOW
 		sfe_fls_unregister();
 		fls_rfs_shutdown();
+#endif
 	}
 }
 
 int __init fls_init(void)
 {
-	int err;
-
-	if (!udp_clf_enabled) {
-
-	/*
-	 * Only FLS with udp_clf is enabled for LM profiles
-	 */
-#ifdef FLS_MEM_PROFILE_LOW
-		FLS_ERROR("Not enabled for LM profile.\n");
-		return -1;
-#endif
-		err = fls_rfs_init();
-		if (err) {
-			return err;
-		}
-
-		fls_conn_tracker_init();
-
-		if (!fls_def_sensor_init(&fct.fsm)) {
-			FLS_ERROR("Failed to register def sensor.\n");
-			fls_rfs_shutdown();
-			return -1;
-		}
-
-		sfe_fls_register(fls_conn_create, fls_conn_delete, fls_conn_stats_update);
+	if (udp_clf_enabled) {
+		return fls_init_udp_clf();
 	}
 
-	fls_debug_init();
-
-	if (!fls_flow_init()) {
-		fls_debug_deinit();
-
-		if (!udp_clf_enabled) {
-			sfe_fls_unregister();
-			fls_rfs_shutdown();
-		}
-		return -1;
-	}
-	return 0;
+	return fls_init_default();
 }
 
 module_init(fls_init)

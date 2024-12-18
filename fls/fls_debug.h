@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023, 2025, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -19,9 +19,12 @@
 #ifndef __FLS_DEBUG_H
 #define __FLS_DEBUG_H
 
+#ifndef FLS_MEM_PROFILE_LOW
 #include "fls_conn.h"
 #include "fls_rfs.h"
+#endif
 
+#ifndef FLS_MEM_PROFILE_LOW
 enum FLS_PFS_CMD_TYPE {
 	FLS_PFS_FLUSH,
 	FLS_PFS_EVENT,
@@ -45,6 +48,7 @@ struct fls_cmdinfo {
 		uint8_t classid;
 	} data;
 };
+#endif
 
 enum fls_debug_level {
 	FLS_DEBUG_LEVEL_NONE,
@@ -61,8 +65,10 @@ enum fls_debug_level {
 #define FLS_TRACE(...) fls_debug_print(FLS_DEBUG_LEVEL_TRACE, __VA_ARGS__)
 
 void fls_debug_print(uint32_t level, char *fmt, ...);
+#ifndef FLS_MEM_PROFILE_LOW
 void fls_debug_print_event_info(struct fls_event *event);
 void fls_debug_print_conn_info(struct fls_conn *conn);
+#endif
 void fls_debug_deinit(void);
 void fls_debug_init(void);
 
