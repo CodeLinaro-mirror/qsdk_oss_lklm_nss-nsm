@@ -63,24 +63,17 @@ struct neighbour *fls_flow_get_neigh_ipv4(uint32_t ip_addr)
 	 */
 	neigh = dst_neigh_lookup(dst, &ip_addr);
 	if (likely(neigh)) {
-		dst_release(dst);
-		return neigh;
+		goto out;
 	}
 
 	/*
 	 * neighbour lookup using IP address, device in the arp table
 	 */
 	neigh = neigh_lookup(&arp_tbl, &ip_addr, dst->dev);
-	if (likely(neigh)) {
-		dst_release(dst);
-		return neigh;
-	}
+out:
 
-	/*
-	 * dst reference count was held during the lookup
-	 */
 	dst_release(dst);
-	return NULL;
+	return neigh;
 }
 
 /*
@@ -158,15 +151,9 @@ static struct neighbour *fls_flow_get_neigh_ipv6(uint32_t ip_addr[4])
 	 * neighbour lookup using IP address in the neighbor table
 	 */
 	neigh = dst_neigh_lookup(dst, ip_addr);
-	if (likely(neigh)) {
-		neigh_hold(neigh);
-		dst_release(dst);
-
-		return neigh;
-	}
 	dst_release(dst);
 
-	return NULL;
+	return neigh;
 }
 
 /*
