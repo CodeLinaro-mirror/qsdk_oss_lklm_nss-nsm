@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -223,12 +223,14 @@ void fls_flow_print_udp_clf_flow(struct fls_flow_udp_clf *udp_clf_flow)
 		FLS_TRACE("\nsrc=%pI6 dst=%pI6 ",
 			&udp_clf_flow->src_ip_addr, &udp_clf_flow->dst_ip_addr);
 	}
-	FLS_TRACE("sport=%hu dport=%hu org_dscp=%hu ret_dscp=%hu\n protocol=%u org_bytes=%u ret_bytes=%u \n",
+	FLS_TRACE("sport=%hu dport=%hu org_dscp=%hu ret_dscp=%hu\n protocol=%u org_bytes=%u ret_bytes=%u \n is_src_wiphy=%d is_dst_wiphy=%d \n",
 		ntohs(udp_clf_flow->src_port), ntohs(udp_clf_flow->dst_port),
 		ntohs(udp_clf_flow->org_dscp), ntohs(udp_clf_flow->ret_dscp),
 		udp_clf_flow->proto,
 		udp_clf_flow->org_bytes,
-		udp_clf_flow->ret_bytes);
+		udp_clf_flow->ret_bytes,
+		udp_clf_flow->is_src_wiphy,
+		udp_clf_flow->is_dst_wiphy);
 }
 
 /*
@@ -277,7 +279,8 @@ int fls_flow_fill_udp_clf_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tu
 	}
 
 #ifdef FLS_ECM_CLASSIFIER_EMESH_ENABLE
-	ret = ecm_classifier_emesh_sawf_get_connection_info(ct, &udp_clf_flow->org_dscp, &udp_clf_flow->ret_dscp);
+	ret = ecm_classifier_emesh_sawf_get_connection_info(ct, &udp_clf_flow->org_dscp, &udp_clf_flow->ret_dscp,
+			&udp_clf_flow->is_src_wiphy, &udp_clf_flow->is_dst_wiphy);
 #endif
 	if (!ret) {
 		FLS_TRACE("FLS_UDP_CLF no connection info for flow message\n");
