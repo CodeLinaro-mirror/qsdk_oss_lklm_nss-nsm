@@ -1,6 +1,6 @@
 /*
  **************************************************************************
- * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -52,6 +52,8 @@ struct fls_flow_udp_clf {
 	uint32_t ret_dscp;		/* Return direction DSCP */
 	uint64_t org_bytes;		/* Original Direction Bytes */
 	uint64_t ret_bytes;		/* Return Direction Bytes */
+	bool is_src_wiphy;		/* Is source wireless device? */
+	bool is_dst_wiphy;		/* Is destination wireless device? */
 	uint8_t flags;			/* Flags used for processing by TM APP */
 };
 
