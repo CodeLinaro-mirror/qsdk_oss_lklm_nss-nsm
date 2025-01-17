@@ -19,12 +19,12 @@
 #ifndef __FLS_DEBUG_H
 #define __FLS_DEBUG_H
 
-#ifndef FLS_MEM_PROFILE_LOW
+#ifndef FLS_LITE_ENABLE
 #include "fls_conn.h"
 #include "fls_rfs.h"
 #endif
 
-#ifndef FLS_MEM_PROFILE_LOW
+#ifndef FLS_LITE_ENABLE
 enum FLS_PFS_CMD_TYPE {
 	FLS_PFS_FLUSH,
 	FLS_PFS_EVENT,
@@ -65,7 +65,7 @@ enum fls_debug_level {
 #define FLS_TRACE(...) fls_debug_print(FLS_DEBUG_LEVEL_TRACE, __VA_ARGS__)
 
 void fls_debug_print(uint32_t level, char *fmt, ...);
-#ifndef FLS_MEM_PROFILE_LOW
+#ifndef FLS_LITE_ENABLE
 void fls_debug_print_event_info(struct fls_event *event);
 void fls_debug_print_conn_info(struct fls_conn *conn);
 #endif
