@@ -43,7 +43,7 @@ static struct ctl_table fls_debug_table_udp_clf[] = {
 	{ }
 };
 
-#ifndef FLS_MEM_PROFILE_LOW
+#ifndef FLS_LITE_ENABLE
 static uint32_t fls_debug_sample_count_min = 1;
 static uint32_t fls_debug_sample_count_max = FLS_DEF_SENSOR_MAX_SAMPLE_COUNT;
 static uint32_t fls_debug_bool_min = 0;
@@ -380,7 +380,7 @@ void fls_debug_init(void)
 	fls_debug_level_current = FLS_DEBUG_LEVEL_DEFAULT;
 
 	if (udp_clf_enabled) {
-		fls_debug_header = register_sysctl("net/fls", fls_debug_table_udp_clf);
+		fls_debug_header = register_sysctl("net/fls-lite", fls_debug_table_udp_clf);
 		if (!fls_debug_header) {
 			FLS_ERROR("Failed to register fls sysctl table.\n");
 		}
@@ -388,7 +388,7 @@ void fls_debug_init(void)
 		return;
 	}
 
-#ifndef FLS_MEM_PROFILE_LOW
+#ifndef FLS_LITE_ENABLE
 	pentry = proc_create("fls_cmd", 0644, NULL, &fls_pfsops);
 	if (!pentry) {
 		FLS_ERROR("Failed to register fls procfs cmd file\n");

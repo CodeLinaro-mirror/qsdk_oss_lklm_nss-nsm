@@ -20,17 +20,19 @@
 #include "fls_chardev.h"
 #include "fls_debug.h"
 
-#ifndef FLS_MEM_PROFILE_LOW
+#ifndef FLS_LITE_ENABLE
 #include "fls_conn.h"
 #include <sfe_api.h>
 #endif
 
 #include <linux/module.h>
 
-/* Module params */
-int udp_clf_enabled = 0;
-module_param(udp_clf_enabled, int, S_IRUGO);
-MODULE_PARM_DESC(udp_clf_enabled, "enable UDP classifier");
+/* FLS lite is used with UDP classificaton */
+#ifdef FLS_LITE_ENABLE
+int udp_clf_enabled = 1;
+#else
+int udp_clf_enabled;
+#endif
 
 static int fls_init_udp_clf(void)
 {
@@ -45,10 +47,7 @@ static int fls_init_udp_clf(void)
 
 static int fls_init_default(void)
 {
-#ifdef FLS_MEM_PROFILE_LOW
-	FLS_ERROR("Not enabled for LM profile.\n");
-	return -1;
-#else
+#ifndef FLS_LITE_ENABLE
 	int err;
 
 	err = fls_rfs_init();
@@ -74,8 +73,8 @@ static int fls_init_default(void)
 		fls_rfs_shutdown();
 		return -1;
 	}
-	return 0;
 #endif
+	return 0;
 }
 
 void __exit fls_exit(void)
@@ -84,7 +83,7 @@ void __exit fls_exit(void)
 	fls_debug_deinit();
 
 	if (!udp_clf_enabled) {
-#ifndef FLS_MEM_PROFILE_LOW
+#ifndef FLS_LITE_ENABLE
 		sfe_fls_unregister();
 		fls_rfs_shutdown();
 #endif
