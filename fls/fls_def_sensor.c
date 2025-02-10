@@ -17,6 +17,8 @@
  */
 
 #include <linux/types.h>
+#include <linux/ip.h>
+#include <linux/inet.h>
 
 #include "fls_conn.h"
 #include "fls_def_sensor.h"
@@ -169,7 +171,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 	event.timestamp = time;
 
 	if (type == FLS_RFS_EVENT_TYPE_XXL) {
-		FLS_TRACE("%px: %sEnqueue XXL event\n", conn, sendevent? "Skip ":"");
+		FLS_TRACE("%px: %sEnqueue XXL event\n", conn, sendevent? "":"Skip ");
 
 		/*
 		 * sample[0].window[0] contains large window data.
@@ -197,7 +199,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 	}
 
 	if (type == FLS_RFS_EVENT_TYPE_XL) {
-		FLS_TRACE("%px: %sEnqueue XL event\n", conn, sendevent? "Skip ":"");
+		FLS_TRACE("%px: %sEnqueue XL event\n", conn, sendevent? "":"Skip ");
 
 		/*
 		 * sample[0].window[0] contains large window data.
@@ -426,7 +428,10 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		now = ktime_get_boottime();
 	}
 	if (!conn->stats.isd.first_packet_time) {
-		FLS_INFO("%p First packet. t = %lld", conn, now);
+		FLS_WARN("%p First packet. t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
+			conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
+			ip_hdr(skb)->protocol);
+
 		fls_debug_print_conn_info(conn);
 
 		conn->stats.isd.first_packet_time = now;
@@ -449,14 +454,14 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		/*
 		 * For XXL sample, Only the last window is opened for data collection
 		 */
-		FLS_TRACE("%p start XXL window to now \n", conn);
+		FLS_WARN("%p start XXL window, t = %lld \n", conn, now);
 		conn->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
 
 		/*
 		 * For XL sample, Only the last window is opened for data collection
 		 * since only one window is needed
 		 */
-		FLS_TRACE("%p start XL window to now \n", conn);
+		FLS_WARN("%p start XL window, t = %lld \n", conn, now);
 		conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
 
 		if (conn->reverse) {
@@ -488,7 +493,9 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		}
 
 		conn->flags |= SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED;
-		FLS_INFO("%p Delay finished, starting data collection. t = %lld", conn, now);
+		FLS_WARN("%p Delay finished, starting data collection, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]",
+			conn, now, &conn->src_ip, ntohs(conn->src_port), &conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
+			ip_hdr(skb)->protocol);
 		conn->stats.isd.first_packet_time = now;
 		conn->stats.isd.event_start_time = now;
 		conn->stats.isd.samples[0].sample_start_time = now;
@@ -572,6 +579,9 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 							conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
 				}
 			}
+			FLS_WARN("%p Create XL event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
+				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
+				ip_hdr(skb)->protocol);
 			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_XL);
 		}
 	}
@@ -594,6 +604,9 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 				}
 			}
 
+			FLS_WARN("%p Create XXL event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
+				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
+				ip_hdr(skb)->protocol);
 			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_XXL);
 		}
 	}
@@ -622,6 +635,10 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		 */
 		if ((event_count > conn->stats.isd.events)) {
 			struct fls_conn *reply = conn->reverse;
+
+			FLS_WARN("%p Create Default event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
+				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
+				ip_hdr(skb)->protocol);
 			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_DEF);
 			conn->stats.isd.events = event_count;
 			if (reply) {
