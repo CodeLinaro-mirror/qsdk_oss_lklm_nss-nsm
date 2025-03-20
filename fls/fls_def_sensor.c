@@ -1,24 +1,12 @@
 /*
- **************************************************************************
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include <linux/types.h>
 #include <linux/ip.h>
 #include <linux/inet.h>
+#include <net/gro.h>
 
 #include "fls_conn.h"
 #include "fls_def_sensor.h"
@@ -247,20 +235,23 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 	}
 }
 
-static void fls_def_sensor_bytes_record(struct fls_def_sensor_sample *sample, uint32_t bytes)
+static void fls_def_sensor_bytes_record(struct fls_def_sensor_sample *sample, uint32_t bytes, struct fls_gro_frag_stats gro_stats)
 {
+	uint32_t min_bytes = gro_stats.is_gro_skb ? gro_stats.min_bytes : bytes;
+	uint32_t max_bytes = gro_stats.is_gro_skb ? gro_stats.max_bytes : bytes;
+
 	if (sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets == 0) {
 		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes = bytes;
-		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min = bytes;
-		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max = bytes;
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min = min_bytes;
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max = max_bytes;
 		return;
 	}
 
 	sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes += bytes;
-	if (bytes < sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min) {
-		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min = bytes;
-	} else if (bytes > sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max) {
-		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max = bytes;
+	if (min_bytes < sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min) {
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min = min_bytes;
+	} else if (max_bytes > sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max) {
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max = max_bytes;
 	}
 }
 
@@ -394,6 +385,109 @@ static void fls_def_sensor_window_close(struct fls_def_sensor_sample *sample, st
 	fls_def_sensor_burst_close(window);
 }
 
+/*
+ * Traverses the skb to analyze its GRO fragments.
+ * Calculates the minimum and maximum fragment sizes in the skb.
+ */
+int fls_def_traverse_gro_skb(struct sk_buff *skb, struct fls_gro_frag_stats *gro_stats) {
+	struct sk_buff *frag;
+	uint16_t min_frag_size = 0;
+	uint16_t max_frag_size = 0;
+	uint16_t frag_size = 0;
+	uint16_t frag_hdrlen = 0;
+	uint16_t last_frag_ip_id = 0;
+
+	/*
+	 * There are two cases that needs to be handled for GRO skb:
+	 * Case 1: Handle fragments in skb_shinfo(skb)->frag_list (chained fragments).
+	 * Case 2: Handle fragments in skb_shinfo(skb)->nr_frags (when page mode is enabled).
+	 * TODO: Case 2 is not handled in the current implementation.
+	 */
+
+	/*
+	 * Case 1: Handle fragments in skb_shinfo(skb)->frag_list.
+	 */
+
+	/*
+	 * Start with the head skb length as a fragment size (includes headers).
+	 */
+	min_frag_size = max_frag_size = skb_headlen(skb);
+
+	/*
+	 * Check if the skb contains a fragment list (skb_shinfo(skb)->frag_list).
+	 * It is typically used to determine whether the skb includes
+	 * additional data fragments beyond the linear data area.
+	 */
+	if (likely(skb_has_frag_list(skb))) {
+		/*
+		 * skb frag parsing
+		 */
+		skb_walk_frags(skb, frag) {
+			/*
+			 * The following logic calculates the header length in the fragment skb.
+			 * It is determined as follows:
+			 * frag->head: points to the start of the headroom.
+			 * frag->network_header: points to the network offset.
+			 * frag->data: points to the data start (which is the payload).
+			 * The header length includes both the IP and transport headers.
+			 */
+			frag_hdrlen = frag->data - (frag->head + frag->network_header);
+
+			/*
+			 * Calculate the total fragment size by adding the fragment length and header length.
+			 */
+			frag_size = frag->len + frag_hdrlen;
+
+			/*
+			 * Update min fragment size
+			 */
+			if (frag_size < min_frag_size) {
+				min_frag_size = frag_size;
+			}
+
+			/*
+			 * Update max fragment size
+			 */
+			if (frag_size > max_frag_size) {
+				max_frag_size = frag_size;
+			}
+
+			/*
+			 * Update the IP Header ID of the last fragment
+			 */
+			last_frag_ip_id = ntohs(ip_hdr(frag)->id);
+
+			FLS_TRACE("frag_len = %u, frag_hdrlen = %u, frag_size(total) = %u, min_frag_size = %u, max_frag_size = %u\n", frag->len, frag_hdrlen, frag_size, min_frag_size, max_frag_size);
+		}
+		/*
+		 * Update the final min, max frag sizes and last frag IP Header ID.
+		 */
+		gro_stats->min_bytes = min_frag_size;
+		gro_stats->max_bytes = max_frag_size;
+		gro_stats->last_frag_ip_id = last_frag_ip_id;
+
+		return 0;
+	} else if (skb_shinfo(skb)->nr_frags > 0) {
+		/*
+		 * TODO:
+		 * Case 2: Unhandled paged buffers case detected.
+		 */
+		FLS_WARN("Unhandled paged buffers (nr_frags=%d)\n", skb_shinfo(skb)->nr_frags);
+	} else {
+		/*
+		 * No fragments (neither frag_list nor nr_frags)
+		 * A case when skb is marked as GRO but contains only linear data.
+		 */
+		FLS_WARN("No fragments: (neither frag_list nor nr_frags)\n");
+	}
+
+	gro_stats->min_bytes = skb_headlen(skb);
+	gro_stats->max_bytes = skb_headlen(skb);
+	gro_stats->last_frag_ip_id = ntohs(ip_hdr(skb)->id);
+
+	return -1;
+}
+
 uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb)
 {
 	ktime_t now;
@@ -403,8 +497,9 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 	struct fls_def_sensor_sample *xl_sample;
 	uint32_t delay = fls_def_sensor_delay;
 	uint32_t sample_length = fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_LG];
+	struct fls_gro_frag_stats gro_stats = {0};
 	int64_t sample_diff, xxl_diff, xl_diff;
-	int i;
+	int i, ret = 0;
 
 	if (fls_def_sensor_max_events == 0 || sample_length == 0) {
 		FLS_TRACE("%p Default sensor disabled.\n", conn);
@@ -427,6 +522,7 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 	} else {
 		now = ktime_get_boottime();
 	}
+
 	if (!conn->stats.isd.first_packet_time) {
 		FLS_WARN("%p First packet. t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
 			conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
@@ -514,6 +610,26 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		fls_debug_print_conn_info(conn);
 	}
 
+	/*
+	 * For GRO skbs, retrieve the fragment count and add it to the packet count.
+	 * Also, determine the minimum and maximum fragment sizes to update the min and max byte values.
+	 */
+	if (skb_is_gso(skb)) {
+		gro_stats.frags_count = NAPI_GRO_CB(skb)->count;
+		gro_stats.is_gro_skb = true;
+
+		FLS_TRACE("%p: skb_is_gso, gso_size(mss) = %u, GRO fragments count: %u, nr_frags = %d, gso_segs = %u\n", skb, skb_shinfo(skb)->gso_size, gro_stats.frags_count, skb_shinfo(skb)->nr_frags, skb_shinfo(skb)->gso_segs);
+		FLS_TRACE("%p: skb_is_gso, skb->len = %u, skb->data_len = %u, skb->headlen = %u\n", skb, skb->len, skb->data_len, skb_headlen(skb));
+
+		ret = fls_def_traverse_gro_skb(skb, &gro_stats);
+		if (ret) {
+			FLS_ERROR("%p: Failed to traverse GRO skb, continue with head skb\n", skb);
+		}
+
+		FLS_TRACE("Minimum fragment size: %u\n", gro_stats.min_bytes);
+		FLS_TRACE("Maximum fragment size: %u\n", gro_stats.max_bytes);
+	}
+
 	sample_index = conn->stats.isd.sample_index;
 	sample_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.samples[sample_index].sample_start_time));
 	for (i = 0; i < FLS_DEF_SENSOR_WINDOW_LG; i++) {
@@ -580,8 +696,8 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 				}
 			}
 			FLS_WARN("%p Create XL event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
-				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
-				ip_hdr(skb)->protocol);
+				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port),
+				skb_is_gso(skb) ? gro_stats.last_frag_ip_id : ntohs(ip_hdr(skb)->id), ip_hdr(skb)->protocol);
 			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_XL);
 		}
 	}
@@ -605,8 +721,8 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 			}
 
 			FLS_WARN("%p Create XXL event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
-				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
-				ip_hdr(skb)->protocol);
+				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port),
+				skb_is_gso(skb) ? gro_stats.last_frag_ip_id : ntohs(ip_hdr(skb)->id), ip_hdr(skb)->protocol);
 			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_XXL);
 		}
 	}
@@ -637,8 +753,8 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 			struct fls_conn *reply = conn->reverse;
 
 			FLS_WARN("%p Create Default event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
-				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
-				ip_hdr(skb)->protocol);
+				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port),
+				skb_is_gso(skb) ? gro_stats.last_frag_ip_id : ntohs(ip_hdr(skb)->id), ip_hdr(skb)->protocol);
 			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_DEF);
 			conn->stats.isd.events = event_count;
 			if (reply) {
@@ -689,11 +805,11 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 
 	/* Record window data, along with XXL/XL window if it is open. */
 	if (fls_def_sensor_bytes) {
-		fls_def_sensor_bytes_record(sample, skb->len);
-		if(xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
-			fls_def_sensor_bytes_record(xxl_sample, skb->len);
-		if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
-			fls_def_sensor_bytes_record(xl_sample, skb->len);
+		fls_def_sensor_bytes_record(sample, skb->len, gro_stats);
+		if (xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			fls_def_sensor_bytes_record(xxl_sample, skb->len, gro_stats);
+		if (xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			fls_def_sensor_bytes_record(xl_sample, skb->len, gro_stats);
 	}
 
 	if (fls_def_sensor_ipat) {
@@ -720,12 +836,21 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		}
 	}
 
-	sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
-	if(xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
-		xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+	if ((gro_stats.is_gro_skb) && (skb_shinfo(skb)->nr_frags == 0)) {
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets += gro_stats.frags_count;
+		if (xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets += gro_stats.frags_count;
 
-	if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
-		xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+		if (xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets += gro_stats.frags_count;
+	} else {
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+		if (xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+
+		if (xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+	}
 
 	return SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 }
