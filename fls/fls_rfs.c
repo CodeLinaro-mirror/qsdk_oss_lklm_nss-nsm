@@ -46,6 +46,42 @@ struct workqueue_struct * fls_rfs_workqueue;
 static struct fls_event_log event_log;
 static char buf[sizeof(struct fls_rfs_telemetry_agent_header) + sizeof(struct fls_event)];
 
+void fls_rfs_clean_events(void)
+{
+	unsigned long irqflags_write, irqflags_read;
+
+	spin_lock_irqsave(&event_log.read_lock, irqflags_read);
+
+	if (event_log.read_index == event_log.write_index) {
+		spin_unlock_irqrestore(&event_log.read_lock, irqflags_read);
+		FLS_ERROR("Event log is empty. read_index:%d, write_index:%d\n", event_log.read_index, event_log.write_index);
+		return;
+	}
+
+	spin_unlock_irqrestore(&event_log.read_lock, irqflags_read);
+
+	spin_lock_irqsave(&event_log.write_lock, irqflags_write);
+
+	memset(event_log.event_ring_buf, 0, sizeof(event_log.event_ring_buf));
+	printk("Flushed FLS rfs ring buffer, WI = %u, RI = %u", event_log.write_index, event_log.read_index);
+	event_log.write_index = 0;
+
+	spin_unlock_irqrestore(&event_log.write_lock, irqflags_write);
+
+	/*
+	 * It is best to reset write then read. If a race to acquire read_lock,
+	 * between fls_rfs_clean_events() and fls_rfs_write() is won by fls_rfs_write(),
+	 * a 0 filled buffer will be sent to userspace. This can easily be mitigated with
+	 * filtering in userspace. If read were to be reset prior to write, it is possible
+	 * the same event could be sent to userspace twice.
+	 */
+	spin_lock_irqsave(&event_log.read_lock, irqflags_read);
+
+	event_log.read_index = 0;
+
+	spin_unlock_irqrestore(&event_log.read_lock, irqflags_read);
+}
+
 void fls_rfs_write(struct work_struct *work) {
 	unsigned long irqflags;
 
