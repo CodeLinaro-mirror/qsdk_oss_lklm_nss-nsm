@@ -131,5 +131,6 @@ struct fls_rfs_telemetry_agent_header
 bool fls_rfs_enqueue(struct fls_event *event);
 void fls_rfs_shutdown(void);
 int fls_rfs_init(void);
+void fls_rfs_clean_events(void);
 
 #endif

@@ -220,46 +220,49 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 	}
 
 	switch (packetinfo.cmd) {
-		case FLS_PFS_RESULT:
-			FLS_TRACE("\nFLS: Receive stop command.\n");
-			spin_lock(&fls_conn_lock);
-			conn = fls_conn_lookup(packetinfo.version, packetinfo.protocol,
-						packetinfo.src_ip,
-						packetinfo.src_port,
-						packetinfo.dst_ip,
-						packetinfo.dst_port);
-			if(conn) {
-				conn->stats.isd.sendevent = false;
-				if(conn->reverse)
-					conn->reverse->stats.isd.sendevent = false;
-				if (fls_def_sensor_max_events != -1 && fls_def_sensor_stop_forever)  {
-					FLS_TRACE("Lookup succeed! Stop XXL collection (FOREVER).");
-					conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-					if (conn->reverse) {
-						conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-					}
-					spin_unlock(&fls_conn_lock);
-					return count;
+	case FLS_PFS_RESULT:
+		FLS_TRACE("\nFLS: Receive stop command.\n");
+		spin_lock(&fls_conn_lock);
+		conn = fls_conn_lookup(packetinfo.version, packetinfo.protocol,
+					packetinfo.src_ip,
+					packetinfo.src_port,
+					packetinfo.dst_ip,
+					packetinfo.dst_port);
+		if(conn) {
+			conn->stats.isd.sendevent = false;
+			if(conn->reverse)
+				conn->reverse->stats.isd.sendevent = false;
+			if (fls_def_sensor_max_events != -1 && fls_def_sensor_stop_forever)  {
+				FLS_TRACE("Lookup succeed! Stop XXL collection (FOREVER).");
+				conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+				if (conn->reverse) {
+					conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 				}
-				FLS_TRACE("Lookup succeed! Stop XXL collection (For this epoch).");
-			} else {
-				FLS_TRACE("Lookup failed!\n");
+				spin_unlock(&fls_conn_lock);
+				return count;
 			}
+			FLS_TRACE("Lookup succeed! Stop XXL collection (For this epoch).");
+		} else {
+			FLS_TRACE("Lookup failed!\n");
+		}
 
-			spin_unlock(&fls_conn_lock);
-			return count;
+		spin_unlock(&fls_conn_lock);
+		break;
 
-		case FLS_PFS_EVENT:
-			FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
-			return 0;
+	case FLS_PFS_EVENT:
+		FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
+		break;
 
-		case FLS_PFS_FLUSH:
-			FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
-			return 0;
+	case FLS_PFS_FLUSH:
+		FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
+		break;
 
-		default:
-			FLS_ERROR("Unrecognized command %d.\n", packetinfo.cmd);
-			return 0;
+	case FLS_PFS_CLEAN_EVENTS:
+		fls_rfs_clean_events();
+		break;
+
+	default:
+		FLS_ERROR("Unrecognized command %d.\n", packetinfo.cmd);
 	}
 
 	return count;
