@@ -1,19 +1,6 @@
 /*
- **************************************************************************
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include <linux/sysctl.h>
@@ -48,8 +35,6 @@ static uint32_t fls_debug_sample_count_min = 1;
 static uint32_t fls_debug_sample_count_max = FLS_DEF_SENSOR_MAX_SAMPLE_COUNT;
 static uint32_t fls_debug_bool_min = 0;
 static uint32_t fls_debug_bool_max = 1;
-
-DEFINE_SPINLOCK(fls_conn_lock);
 
 static struct ctl_table fls_debug_table[] = {
 	{
@@ -222,7 +207,6 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 	switch (packetinfo.cmd) {
 	case FLS_PFS_RESULT:
 		FLS_TRACE("\nFLS: Receive stop command.\n");
-		spin_lock(&fls_conn_lock);
 		conn = fls_conn_lookup(packetinfo.version, packetinfo.protocol,
 					packetinfo.src_ip,
 					packetinfo.src_port,
@@ -238,15 +222,13 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 				if (conn->reverse) {
 					conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 				}
-				spin_unlock(&fls_conn_lock);
-				return count;
+				break;
 			}
 			FLS_TRACE("Lookup succeed! Stop XXL collection (For this epoch).");
 		} else {
 			FLS_TRACE("Lookup failed!\n");
 		}
 
-		spin_unlock(&fls_conn_lock);
 		break;
 
 	case FLS_PFS_EVENT:
