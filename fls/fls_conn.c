@@ -1,19 +1,6 @@
 /*
- **************************************************************************
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include "fls_conn.h"
@@ -169,14 +156,14 @@ struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 	struct fls_conn *connection;
 	struct fls_conn *hash_head;
 
-	spin_lock(&(fct.lock));
+	spin_lock_bh(&(fct.lock));
 	connection = fct.hash[hash];
 	hash_head = connection;
 
 	while (connection) {
 		if (fls_conn_matches(connection, ip_version, protocol, src_ip, src_port, dest_ip, dest_port)) {
 			if(connection == hash_head) {
-				spin_unlock(&(fct.lock));
+				spin_unlock_bh(&(fct.lock));
 				return connection;
 			}
 			connection->hash_prev->hash_next = connection->hash_next;
@@ -186,13 +173,13 @@ struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 			connection->hash_next = hash_head;
 			hash_head->hash_prev = connection;
 			fct.hash[hash] = connection;
-			spin_unlock(&(fct.lock));
+			spin_unlock_bh(&(fct.lock));
 			return connection;
 		}
 		connection = connection->hash_next;
 	}
 
-	spin_unlock(&(fct.lock));
+	spin_unlock_bh(&(fct.lock));
 	return NULL;
 }
 EXPORT_SYMBOL(fls_conn_lookup);
@@ -243,7 +230,7 @@ void fls_conn_flush() {
 	struct fls_conn *conn;
 	int i;
 	FLS_TRACE("flush external connection\n");
-	spin_lock(&(fct.lock));
+	spin_lock_bh(&(fct.lock));
 	for (i = 0; i < FLS_CONN_MAX; i++) {
 		conn = &(fct.connections[i]);
 		if(!conn->externalrule)
@@ -252,7 +239,7 @@ void fls_conn_flush() {
 		fls_debug_print_conn_info(conn);
 		fls_conn_delete_internal(conn);
 	}
-	spin_unlock(&(fct.lock));
+	spin_unlock_bh(&(fct.lock));
 }
 
 /*
@@ -262,10 +249,10 @@ void fls_conn_flush() {
 void fls_conn_delete(void *conn)
 {
 	FLS_INFO("FID: Deleting connection.");
+	spin_lock_bh(&(fct.lock));
 	fls_debug_print_conn_info(conn);
-	spin_lock(&(fct.lock));
 	fls_conn_delete_internal(conn);
-	spin_unlock(&(fct.lock));
+	spin_unlock_bh(&(fct.lock));
 }
 EXPORT_SYMBOL(fls_conn_delete);
 
@@ -289,7 +276,9 @@ bool fls_conn_delete_timeout(ktime_t now, s64 threshold) {
 		abs_diff = ktime_to_ms(ktime_sub(now, cur->last_ts));
 		if(abs_diff / 1000 > threshold) {
 			findtimeout = true;
+			spin_lock_bh(&(fct.lock));
 			fls_conn_delete_internal(cur);
+			spin_unlock_bh(&(fct.lock));
 		}
 		cur = tmp;
 	}
@@ -316,10 +305,8 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 						bool isexternal, ktime_t last_ts) {
 	struct fls_conn *orig;
 	struct fls_conn *reply;
-	spin_lock(&(fct.lock));
 	orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
 	if (!orig && !isexternal) {
-		spin_unlock(&(fct.lock));
 		return NULL;
 	}
 
@@ -327,7 +314,6 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 		if(fls_conn_delete_timeout(last_ts, fls_conn_timeout)){
 			orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
 		} else {
-			spin_unlock(&(fct.lock));
 			return NULL;
 		}
 	}
@@ -336,8 +322,7 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 
 	reply = fls_conn_create_flow(ip_version, protocol, orig_dest_ip, orig_dest_port, orig_src_ip, orig_src_port);
 	if (!reply && !isexternal) {
-		spin_unlock(&(fct.lock));
-		fls_conn_delete(orig);
+		fls_conn_delete_internal(orig);
 		return NULL;
 	}
 
@@ -345,8 +330,7 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 		if(fls_conn_delete_timeout(last_ts, fls_conn_timeout)) {
 			reply = fls_conn_create_flow(ip_version, protocol, orig_dest_ip, orig_dest_port, orig_src_ip, orig_src_port);
 		} else {
-			spin_unlock(&(fct.lock));
-			fls_conn_delete(orig);
+			fls_conn_delete_internal(orig);
 			return NULL;
 		}
 	}
@@ -364,7 +348,6 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 	reply->reverse = orig;
 	orig->dir = FLS_CONN_DIRECTION_ORIG;
 	reply->dir = FLS_CONN_DIRECTION_RET;
-	spin_unlock(&(fct.lock));
 
 	return orig;
 }
@@ -382,14 +365,17 @@ void fls_conn_create(uint8_t ip_version,
 						uint16_t orig_dest_port,
 						void **orig_conn,
 						void **repl_conn) {
+	struct fls_conn *orig;
 
-	struct fls_conn *orig = fls_conn_create_bidiflow(ip_version,
+	spin_lock_bh(&(fct.lock));
+	orig = fls_conn_create_bidiflow(ip_version,
 						protocol,
 						orig_src_ip,
 						orig_src_port,
 						orig_dest_ip,
 						orig_dest_port,
 						false, 0);
+	spin_unlock_bh(&(fct.lock));
 
 	if(orig) {
 		*orig_conn = orig;
