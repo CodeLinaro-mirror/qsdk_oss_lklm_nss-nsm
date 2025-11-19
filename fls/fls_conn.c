@@ -260,16 +260,17 @@ void fls_conn_delete_internal(void *conn)
 
 void fls_conn_flush() {
 	struct fls_conn *conn;
-	int i;
-	FLS_TRACE("flush external connection\n");
+	struct fls_conn *next;
+
+	FLS_TRACE("flush all connections\n");
 	spin_lock_bh(&(fct.lock));
-	for (i = 0; i < FLS_CONN_MAX; i++) {
-		conn = &(fct.connections[i]);
-		if(!conn->externalrule)
-			continue;
+	conn = fct.all_connections_head;
+	while(conn) {
+		next = conn->all_next;
 		FLS_INFO("FID: Deleting connection.");
 		fls_debug_print_conn_info(conn);
 		fls_conn_delete_internal(conn);
+		conn = next;
 	}
 	spin_unlock_bh(&(fct.lock));
 }
