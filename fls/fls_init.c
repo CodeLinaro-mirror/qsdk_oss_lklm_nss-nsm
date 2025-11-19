@@ -82,10 +82,17 @@ void __exit fls_exit(void)
 	fls_flow_deinit();
 	fls_debug_deinit();
 
+	FLS_TRACE("udp_clf_enabled = %d\n", udp_clf_enabled);
 	if (!udp_clf_enabled) {
 #ifndef FLS_LITE_ENABLE
+		FLS_TRACE("sfe_fls_unregister\n");
 		sfe_fls_unregister();
 		fls_rfs_shutdown();
+
+		/*
+		 * Perform existing connections force flush during module exit.
+		 */
+		fls_conn_flush();
 #endif
 	}
 }
