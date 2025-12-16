@@ -1,19 +1,6 @@
 /*
- **************************************************************************
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #define FLS_RFS_EVENT_MAX 128
@@ -84,6 +71,11 @@ void fls_rfs_clean_events(void)
 
 void fls_rfs_write(struct work_struct *work) {
 	unsigned long irqflags;
+
+	if (!rfs.rfschan) {
+		FLS_ERROR("RFS channel not initialized, skipping write\n");
+		return;
+	}
 
 	spin_lock_irqsave(&event_log.read_lock, irqflags);
 
@@ -163,15 +155,36 @@ static void fls_rfs_tele_agent_header_fill(struct fls_rfs_telemetry_agent_header
 
 void fls_rfs_shutdown(void)
 {
-	if (rfs.rfschan) {
-		relay_close(rfs.rfschan);
+	/*
+	 * Stop scheduling and wait for in‑flight work to finish
+	 */
+	if (fls_rfs_workqueue) {
+		cancel_delayed_work_sync(&fls_rfs_work);
 	}
 
-	debugfs_remove_recursive(rfs.de);
-	rfs.de = NULL;
+	/*
+	 * Close the relay channel
+	 */
+	if (rfs.rfschan) {
+		relay_close(rfs.rfschan);
+		rfs.rfschan = NULL;
+	}
 
-	cancel_delayed_work_sync(&fls_rfs_work);
-	destroy_workqueue(fls_rfs_workqueue);
+	/*
+	 * Tear down debugfs
+	 */
+	if (rfs.de) {
+		debugfs_remove_recursive(rfs.de);
+		rfs.de = NULL;
+	}
+
+	/*
+	 * Tear down debugfs
+	 */
+	if (fls_rfs_workqueue) {
+		destroy_workqueue(fls_rfs_workqueue);
+		fls_rfs_workqueue = NULL;
+	}
 }
 
 static int fls_rfs_remove_buf_file_handler(struct dentry *dentry)
