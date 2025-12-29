@@ -501,6 +501,10 @@ static enum hrtimer_restart fls_def_sensor_delay_timer_callback(struct hrtimer *
 	int i;
 	ktime_t kt;
 
+	if (!(cmn->orig->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE) || !(cmn->reply->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
+		return HRTIMER_NORESTART;
+	}
+
 	/*
 	 * Handling delay is done
 	 */
@@ -590,6 +594,10 @@ static enum hrtimer_restart fls_def_sensor_window_timer_callback(struct hrtimer 
 	 * Fetch conn_cmn structure to reference connection instances
 	 */
 	cmn = data->cmn;
+
+	if (!(cmn->orig->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE) || !(cmn->reply->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
+		return HRTIMER_NORESTART;
+	}
 
 	sample_index = cmn->orig->stats.isd.sample_index;
 	if (cmn->orig->stats.isd.samples[sample_index].window[window_index].open) {
@@ -699,6 +707,10 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 	uint32_t quotient, remainder;
 
 	cmn = data->cmn;
+
+	if (!(cmn->orig->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE) || !(cmn->reply->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
+		return HRTIMER_NORESTART;
+	}
 
 	/*
 	 * The timer will trigger at a frequency of the
