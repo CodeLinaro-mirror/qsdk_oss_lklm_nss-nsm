@@ -1,19 +1,6 @@
 /*
- **************************************************************************
- * Copyright (c) 2024-2025, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include <linux/types.h>
@@ -34,6 +21,7 @@
 #include "fls_chardev.h"
 #include "fls_debug.h"
 
+atomic_t fls_flow_work_active = ATOMIC_INIT(0);
 struct delayed_work fls_flow_work;
 struct workqueue_struct *fls_flow_workqueue;
 unsigned int bucket;
@@ -389,6 +377,11 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 
 	FLS_TRACE("FLS_FLOW Workqueue Called\n");
 
+	if (atomic_read(&fls_flow_work_active) == 0) {
+		FLS_WARN("FLS Flow work is inactive.\n");
+		return;
+	}
+
 	/*
 	 * Iterate through nf_conntrack entries
 	 */
@@ -475,7 +468,11 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 		}
 	}
 
-	queue_delayed_work(fls_flow_workqueue, &fls_flow_work, FLS_FLOW_STATS_PUSH_PERIOD);
+	if (atomic_read(&fls_flow_work_active) == 1) {
+		queue_delayed_work(fls_flow_workqueue, &fls_flow_work, FLS_FLOW_STATS_PUSH_PERIOD);
+	} else {
+		FLS_WARN("FLS flow work inactive. Push stats work not enqueued.\n");
+	}
 }
 
 /*
@@ -496,6 +493,7 @@ bool fls_flow_init(void)
 		return false;
 	}
 	INIT_DELAYED_WORK(&fls_flow_work, fls_flow_push_stats_req_work);
+	atomic_set(&fls_flow_work_active, 1);
 	queue_delayed_work(fls_flow_workqueue, &fls_flow_work, FLS_FLOW_STATS_PUSH_PERIOD);
 	FLS_TRACE("FLS CMN Init Success\n");
 
@@ -511,6 +509,8 @@ void fls_flow_deinit(void)
 	/*
 	 * Cancel the push stats req work and destroy workqueues
 	 */
+	atomic_set(&fls_flow_work_active, 0);
 	cancel_delayed_work_sync(&fls_flow_work);
+	flush_workqueue(fls_flow_workqueue);
 	destroy_workqueue(fls_flow_workqueue);
 }
