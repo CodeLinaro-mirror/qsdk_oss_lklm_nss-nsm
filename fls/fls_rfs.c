@@ -28,6 +28,7 @@ struct fls_event_log {
 
 static struct fls_rfs rfs;
 
+atomic_t fls_rfs_active = ATOMIC_INIT(0);
 struct delayed_work fls_rfs_work;
 struct workqueue_struct * fls_rfs_workqueue;
 static struct fls_event_log event_log;
@@ -36,6 +37,11 @@ static char buf[sizeof(struct fls_rfs_telemetry_agent_header) + sizeof(struct fl
 void fls_rfs_clean_events(void)
 {
 	unsigned long irqflags_write, irqflags_read;
+
+	if (atomic_read(&fls_rfs_active) == 0) {
+		FLS_WARN("Clean events failed. RFS inactive.\n");
+		return;
+	}
 
 	spin_lock_irqsave(&event_log.read_lock, irqflags_read);
 
@@ -72,6 +78,11 @@ void fls_rfs_clean_events(void)
 void fls_rfs_write(struct work_struct *work) {
 	unsigned long irqflags;
 
+	if (atomic_read(&fls_rfs_active) == 0) {
+		FLS_WARN("Write failed. RFS inactive.\n");
+		return;
+	}
+
 	if (!rfs.rfschan) {
 		FLS_ERROR("RFS channel not initialized, skipping write\n");
 		return;
@@ -103,7 +114,7 @@ queue_work:
 	 * we should continue to queue work, so to ensure that we will attempt
 	 * to write again and aren't dependent on the enqueue() event
 	 */
-	if (event_log.read_index != event_log.write_index) {
+	if (event_log.read_index != event_log.write_index && atomic_read(&fls_rfs_active) == 1) {
 		queue_delayed_work(fls_rfs_workqueue, &fls_rfs_work, FLS_RFS_WRITE_DELAY);
 	}
 
@@ -114,6 +125,11 @@ bool fls_rfs_enqueue(struct fls_event *event)
 {
 	unsigned long irqflags;
 	uint32_t write_index;
+
+	if (atomic_read(&fls_rfs_active) == 0) {
+		FLS_WARN("FLS RFS enqueue failed. RFS inactive.\n");
+		return false;
+	}
 
 	FLS_INFO("FID: enqueue flow event.");
 	fls_debug_print_event_info(event);
@@ -155,11 +171,14 @@ static void fls_rfs_tele_agent_header_fill(struct fls_rfs_telemetry_agent_header
 
 void fls_rfs_shutdown(void)
 {
+	atomic_set(&fls_rfs_active, 0);
+
 	/*
 	 * Stop scheduling and wait for in‑flight work to finish
 	 */
 	if (fls_rfs_workqueue) {
 		cancel_delayed_work_sync(&fls_rfs_work);
+		flush_workqueue(fls_rfs_workqueue);
 	}
 
 	/*
@@ -241,12 +260,17 @@ int fls_rfs_init(void)
 	fls_rfs_workqueue = create_singlethread_workqueue("fls_rfs_workqueue");
 	if(!fls_rfs_workqueue) {
 		FLS_WARN("Failed to initialize FLS RFS workqueue\n");
-		return false;
+		relay_close(rfs.rfschan);
+		rfs.rfschan = NULL;
+		debugfs_remove_recursive(rfs.de);
+		rfs.de = NULL;
+		return -ENOMEM;
 	}
 
 	fls_rfs_tele_agent_header_fill(&tah);
 
 	INIT_DELAYED_WORK(&fls_rfs_work, fls_rfs_write);
+	atomic_set(&fls_rfs_active, 1);
 
 	return 0;
 }
