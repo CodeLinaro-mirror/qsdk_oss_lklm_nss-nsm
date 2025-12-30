@@ -91,6 +91,7 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 {
 	struct fls_conn *connection;
 	uint32_t hash;
+	atomic_inc(&fct.fls_gbl_counters[FLS_GBL_CREATE_REQUESTS]);
 
 	hash = fls_conn_get_connection_hash(ip_version, protocol, src_ip, src_port, dest_ip, dest_port);
 
@@ -100,6 +101,7 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 	connection = kmem_cache_zalloc(fls_conn_cache, GFP_ATOMIC);
 	if (!connection) {
 		FLS_ERROR("Failed to allocate FLS connection (out of memory).\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
 		return NULL;
 	}
 
@@ -112,6 +114,7 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 		spin_unlock_bh(&fct.lock);
 		kmem_cache_free(fls_conn_cache, connection);
 		FLS_ERROR("FLS connection limit (%u) reached (allocation denied).\n", fct.max_connections);
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MAX_CONN_LIMIT]);
 		return NULL;
 	}
 
@@ -145,6 +148,7 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 	connection->dest_port = dest_port;
 	connection->hash = hash;
 	connection->flags = SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+	connection->traffic_class = 0xFF;
 
 	connection->all_next = fct.all_connections_head;
 	if (fct.all_connections_head) {
@@ -173,6 +177,7 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 	FLS_WARN("Created fls_conn: %p ip_version=%u, protocol=%u, src_ip=%pI4, src_port=%u, dest_ip=%pI4, dest_port=%u, current connections: %u\n",
 			connection, ip_version, protocol, src_ip, ntohs(src_port), dest_ip, ntohs(dest_port), fct.num_connections);
 	spin_unlock_bh(&fct.lock);
+	atomic_inc(&fct.fls_gbl_counters[FLS_GBL_ACTIVE_COUNT]);
 
 	return connection;
 }
@@ -340,6 +345,7 @@ static void fls_conn_delete_internal(void *conn)
 	fct.num_connections--;
 	FLS_WARN("Deleting fls_conn: %p ip_version=%u, protocol=%u, src_ip=%pI4, src_port=%u, dest_ip=%pI4, dest_port=%u, current connections: %u\n",
 			connection, connection->ip_version, connection->protocol, connection->src_ip, ntohs(connection->src_port), connection->dest_ip, ntohs(connection->dest_port), fct.num_connections);
+	atomic_dec(&fct.fls_gbl_counters[FLS_GBL_ACTIVE_COUNT]);
 
 	/*
 	 * Free after list/hash removal
@@ -376,6 +382,7 @@ void fls_conn_flush() {
 void fls_conn_delete(void *conn)
 {
 	FLS_INFO("FID: Deleting connection (CONN_DELETE).");
+	atomic_inc(&fct.fls_gbl_counters[FLS_GBL_DELETE_REQUESTS]);
 	spin_lock_bh(&fct.lock);
 	fls_conn_delete_internal(conn);
 	spin_unlock_bh(&fct.lock);
@@ -433,18 +440,21 @@ struct fls_conn_cmn *fls_conn_alloc_cmn(void)
 	cmn = kmalloc(sizeof(struct fls_conn_cmn), GFP_ATOMIC);
 	if (!cmn) {
 		FLS_WARN("failed to alloc common stats\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
 		return NULL;
 	}
 
 	cmn->timers = kmalloc(sizeof(struct fls_def_sensor_timers), GFP_ATOMIC);
 	if (!cmn->timers) {
 		FLS_WARN("failed to alloc timers struct\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
 		goto cmn_free;
 	}
 
 	cmn->timers->delay_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
 	if (!cmn->timers->delay_timer) {
 		FLS_WARN("failed to alloc delay timer struct\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
 		goto timers_free;
 	}
 	cmn->timers->delay_timer->cmn = cmn;
@@ -453,6 +463,7 @@ struct fls_conn_cmn *fls_conn_alloc_cmn(void)
 	cmn->timers->window_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
 	if (!cmn->timers->window_timer) {
 		FLS_WARN("failed to alloc window timer struct\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
 		goto delay_timer_free;
 	}
 	cmn->timers->window_timer->cmn = cmn;
@@ -461,6 +472,7 @@ struct fls_conn_cmn *fls_conn_alloc_cmn(void)
 	cmn->timers->xl_xxl_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
 	if (!cmn->timers->xl_xxl_timer) {
 		FLS_WARN("failed to alloc xl timer struct\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
 		goto window_timer_free;
 	}
 	cmn->timers->xl_xxl_timer->cmn = cmn;
