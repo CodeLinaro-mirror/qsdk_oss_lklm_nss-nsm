@@ -258,7 +258,7 @@ void fls_conn_delete_internal(void *conn)
 	fct.free_list = connection;
 }
 
-void fls_conn_flush() {
+void fls_conn_flush(void) {
 	struct fls_conn *conn;
 	int i;
 	FLS_TRACE("flush external connection\n");
