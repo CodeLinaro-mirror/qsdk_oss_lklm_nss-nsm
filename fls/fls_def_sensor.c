@@ -775,9 +775,19 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 
 void fls_def_sensor_timer_delete(struct fls_conn *conn)
 {
-	hrtimer_cancel(&conn->cmn->timers->delay_timer->timer);
-	hrtimer_cancel(&conn->cmn->timers->window_timer->timer);
-	hrtimer_cancel(&conn->cmn->timers->xl_xxl_timer->timer);
+	if (conn->cmn->timers->delay_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->delay_timer->timer);
+		conn->cmn->timers->delay_timer->timer.function = NULL;
+	}
+
+	if (conn->cmn->timers->window_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->window_timer->timer);
+		conn->cmn->timers->window_timer->timer.function = NULL;
+	}
+	if (conn->cmn->timers->xl_xxl_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->xl_xxl_timer->timer);
+		conn->cmn->timers->xl_xxl_timer->timer.function = NULL;
+	}
 }
 
 uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb)
