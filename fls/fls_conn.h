@@ -6,6 +6,7 @@
 #ifndef __FLS_CONN_H
 #define __FLS_CONN_H
 
+#include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/spinlock.h>
 #include <linux/if_ether.h>
@@ -60,16 +61,16 @@ struct fls_conn {
 	struct fls_conn *all_prev;
 	struct fls_conn_stats stats;
 	struct fls_conn_cmn *cmn;
-	ktime_t last_ts;	/*last packet arrival*/
+	ktime_t last_ts;		/* last packet arrival */
 };
 
 struct fls_conn_tracker {
-	spinlock_t lock;	/* Synchronization lock. */
-	struct fls_conn connections[FLS_CONN_MAX];
-	struct fls_conn *all_connections_head;
-	struct fls_conn *all_connections_tail;
-	struct fls_conn *hash[FLS_CONN_HASH_SIZE];
-	struct fls_conn *free_list;
+	spinlock_t lock;		/* Synchronization lock. */
+	struct fls_conn **hash;		/* dynamic hash table */
+	struct fls_conn *all_connections_head;		/* active list head */
+	struct fls_conn *all_connections_tail;		/* active list tail */
+	uint32_t max_connections;		/* soft cap */
+	uint32_t num_connections;		/* active count */
 
 	struct fls_sensor_manager fsm;
 };
@@ -84,7 +85,6 @@ extern struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 											uint16_t src_port,
 											uint32_t *dest_ip,
 											uint16_t dest_port);
-void fls_conn_delete_internal(void *conn);
 void fls_conn_delete(void *conn);
 
 struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
@@ -108,6 +108,7 @@ extern void fls_conn_create(uint8_t ip_version,
 										uint16_t orig_dest_port,
 										void **orig_conn,
 										void **repl_conn);
-void fls_conn_tracker_init(void);
+int fls_conn_tracker_init(void);
 void fls_conn_flush(void);
+void fls_conn_tracker_exit(void);
 #endif
