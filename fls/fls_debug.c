@@ -374,6 +374,7 @@ void fls_debug_print(uint32_t level, char *fmt, ...) {
 	if (level <= fls_debug_level_current) {
 		va_start(args, fmt);
 		vprintk(fmt, args);
+		va_end(args);
 	}
 }
 
