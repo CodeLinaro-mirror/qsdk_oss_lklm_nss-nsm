@@ -85,6 +85,7 @@ void fls_rfs_write(struct work_struct *work) {
 
 	if (!rfs.rfschan) {
 		FLS_ERROR("RFS channel not initialized, skipping write\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_CHANNEL_NOT_INIT]);
 		return;
 	}
 
@@ -92,11 +93,13 @@ void fls_rfs_write(struct work_struct *work) {
 
 	if (relay_buf_full(rfs.rbuf)) {
 		FLS_TRACE("RFS Buffer is Full, did not write\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_BUFF_FULL]);
 		goto queue_work;
 	}
 
 	if (event_log.read_index == event_log.write_index) {
 		spin_unlock_irqrestore(&event_log.read_lock, irqflags);
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_EXCEPTION_NO_EVENT_PENDING]);
 		FLS_ERROR("Event log is empty. read_index:%d, write_index:%d\n", event_log.read_index, event_log.write_index);
 		return;
 	}
@@ -137,6 +140,7 @@ bool fls_rfs_enqueue(struct fls_event *event)
 	spin_lock_irqsave(&event_log.write_lock, irqflags);
 	if (((event_log.write_index + 1) & FLS_RFS_EVENT_MASK) == event_log.read_index) {
 		spin_unlock_irqrestore(&event_log.write_lock, irqflags);
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_EXCEPTION_EVENT_QUEUE_FULL]);
 		return false;
 	}
 
@@ -195,10 +199,11 @@ void fls_rfs_shutdown(void)
 	if (rfs.de) {
 		debugfs_remove_recursive(rfs.de);
 		rfs.de = NULL;
+		fls_debug_root_dir = NULL;
 	}
 
 	/*
-	 * Tear down debugfs
+	 * Destroy workqueue
 	 */
 	if (fls_rfs_workqueue) {
 		destroy_workqueue(fls_rfs_workqueue);
@@ -243,9 +248,13 @@ int fls_rfs_init(void)
 	spin_lock_init(&event_log.read_lock);
 	spin_lock_init(&event_log.write_lock);
 
-	rfs.de = debugfs_create_dir(FLS_RFS_NAME, NULL);
-	if (rfs.de == NULL)
+	fls_debug_root_dir = debugfs_create_dir(FLS_RFS_NAME, NULL);
+	rfs.de = fls_debug_root_dir;
+	if (IS_ERR_OR_NULL(rfs.de)) {
+		rfs.de = NULL;
+		fls_debug_root_dir = NULL;
 		return -EPERM;
+	}
 
 	rfs.rfschan = relay_open("fls_ifli",
 		rfs.de,
@@ -254,6 +263,7 @@ int fls_rfs_init(void)
 	if (!rfs.rfschan) {
 		debugfs_remove_recursive(rfs.de);
 		rfs.de = NULL;
+		fls_debug_root_dir = NULL;
 		return -EPERM;
 	}
 
@@ -264,6 +274,7 @@ int fls_rfs_init(void)
 		rfs.rfschan = NULL;
 		debugfs_remove_recursive(rfs.de);
 		rfs.de = NULL;
+		fls_debug_root_dir = NULL;
 		return -ENOMEM;
 	}
 
