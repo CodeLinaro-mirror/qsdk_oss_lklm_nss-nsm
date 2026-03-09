@@ -27,7 +27,7 @@
 #include "fls_def_sensor.h"
 
 #define FLS_RFS_NAME "fls"
-#define FLS_RFS_SAMPLES_MAX 10
+#define FLS_RFS_SAMPLES_MAX 5
 #define FLS_RFS_WINDOWS_MAX 3
 #define FLS_RFS_EVENTS_LIMIT 5
 #define FLS_RFS_TELEMETRY_DATA_TYPE 2
