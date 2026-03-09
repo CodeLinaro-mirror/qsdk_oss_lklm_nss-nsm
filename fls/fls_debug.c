@@ -8,6 +8,7 @@
 #include <linux/proc_fs.h>
 #include "fls_debug.h"
 #include "fls_flow.h"
+#include "fls_stats.h"
 
 #define FLS_DEBUG_LEVEL_DEFAULT FLS_DEBUG_LEVEL_ERROR
 
@@ -243,8 +244,12 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 					packetinfo.dst_port);
 		if(conn) {
 			conn->stats.isd.sendevent = false;
-			if(conn->reverse)
+			conn->traffic_class = packetinfo.data.classid;
+
+			if(conn->reverse) {
 				conn->reverse->stats.isd.sendevent = false;
+				conn->reverse->traffic_class = packetinfo.data.classid;
+			}
 			if (fls_def_sensor_max_events != -1 && fls_def_sensor_stop_forever)  {
 				FLS_TRACE("Lookup succeed! Stop XXL collection (FOREVER).");
 				conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
@@ -254,6 +259,7 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 				break;
 			}
 			FLS_TRACE("Lookup succeed! Stop XXL collection (For this epoch).");
+			fls_debug_print_conn_info(conn);
 		} else {
 			FLS_TRACE("Lookup failed!\n");
 		}
@@ -320,6 +326,11 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 	char ipaddr_str[16];
 	uint32_t i;
 
+	if (!conn) {
+		printk("fls_debug_print_conn_info: NULL connection pointer\n");
+		return;
+	}
+
 	if (fls_debug_level_current < FLS_DEBUG_LEVEL_INFO) {
 		return;
 	}
@@ -344,6 +355,7 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 			printk("%p orig_dst[%u] = %x", conn, i, conn->dest_ip[i]);
 		}
 	}
+	printk("%p: traffic_class=%u\n", conn, conn->traffic_class);
 
 	reply = conn->reverse;
 	if (!reply) {
@@ -365,6 +377,7 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 			printk("%p repl_dst[%u] = %x", reply, i, reply->dest_ip[i]);
 		}
 	}
+	printk("%p: traffic_class=%u\n", reply, reply->traffic_class);
 }
 #endif
 
@@ -388,6 +401,10 @@ void fls_debug_deinit(void)
 	if (fls_debug_header) {
 		unregister_sysctl_table(fls_debug_header);
 	}
+
+#ifndef FLS_LITE_ENABLE
+	fls_stats_deinit();
+#endif
 }
 
 void fls_debug_init(void)
@@ -413,5 +430,7 @@ void fls_debug_init(void)
 	if (!fls_debug_header) {
 		FLS_ERROR("Failed to register fls sysctl table.\n");
 	}
+
+	fls_stats_init();
 #endif
 }
