@@ -18,7 +18,16 @@
 #define FLS_CONN_HASH_SHIFT 12
 #define FLS_CONN_HASH_SIZE (1 << FLS_CONN_HASH_SHIFT)
 #define FLS_CONN_HASH_MASK (FLS_CONN_HASH_SIZE - 1)
+
+/*
+ * This is inline with SFE max connections for LM profile.
+ * Needs to be revisited if we update SFE max connections.
+ */
+#ifdef FLS_MEM_PROFILE_512
+#define FLS_CONN_MAX 4096
+#else
 #define FLS_CONN_MAX 8192
+#endif
 
 enum fls_conn_direction {
 	FLS_CONN_DIRECTION_ORIG,
