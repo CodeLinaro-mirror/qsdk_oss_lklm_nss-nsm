@@ -725,6 +725,11 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 
 	cmn = data->cmn;
 
+	if (!(cmn->orig->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE) || !(cmn->reply->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
+		FLS_INFO("%p: Defer XL or XXL event create due to stats collection disabled\n", cmn->orig);
+		return HRTIMER_NORESTART;
+	}
+
 	/*
 	 * The timer will trigger at a frequency of the
 	 * greatest common factor between the xl and xxl

@@ -85,22 +85,22 @@ int fls_flow_get_macaddr_ipv4(uint32_t ip_addr, uint8_t *mac_addr)
 	 */
 	neigh = fls_flow_get_neigh_ipv4(ip_addr);
 	if (!neigh) {
-		FLS_INFO("neighbour lookup failed for IP:0x%x\n", ip_addr);
+		FLS_TRACE("neighbour lookup failed for IP:0x%x\n", ip_addr);
 		return -ENODEV;
 	}
 
 	if ((neigh->nud_state & NUD_VALID) == 0) {
-		FLS_INFO("neighbour state is invalid for IP:0x%x\n", ip_addr);
+		FLS_TRACE("neighbour state is invalid for IP:0x%x\n", ip_addr);
 		goto fail;
 	}
 
 	if (!neigh->dev) {
-		FLS_INFO("neighbour device not found for IP:0x%x\n", ip_addr);
+		FLS_TRACE("neighbour device not found for IP:0x%x\n", ip_addr);
 		goto fail;
 	}
 
 	if (is_multicast_ether_addr(neigh->ha)) {
-		FLS_INFO( "neighbour MAC address is multicast or broadcast\n");
+		FLS_TRACE( "neighbour MAC address is multicast or broadcast\n");
 		goto fail;
 	}
 
@@ -170,22 +170,22 @@ static int fls_flow_get_macaddr_ipv6(uint32_t ip_addr[4], uint8_t mac_addr[])
 	 */
 	neigh = fls_flow_get_neigh_ipv6(ip_addr);
 	if (!neigh) {
-		FLS_INFO("neighbour lookup failed for %pI6c\n", ip_addr);
+		FLS_TRACE("neighbour lookup failed for %pI6c\n", ip_addr);
 		return -ENODEV;
 	}
 
 	if ((neigh->nud_state & NUD_VALID) == 0) {
-		FLS_INFO("neighbour state is invalid for %pI6c\n", ip_addr);
+		FLS_TRACE("neighbour state is invalid for %pI6c\n", ip_addr);
 		goto fail;
 	}
 
 	if (!neigh->dev) {
-		FLS_INFO("neighbour device not found for %pI6c\n", ip_addr);
+		FLS_TRACE("neighbour device not found for %pI6c\n", ip_addr);
 		goto fail;
 	}
 
 	if (is_multicast_ether_addr(neigh->ha)) {
-		FLS_INFO("neighbour MAC address is multicast or broadcast\n");
+		FLS_TRACE("neighbour MAC address is multicast or broadcast\n");
 		goto fail;
 	}
 
