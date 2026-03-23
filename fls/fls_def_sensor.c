@@ -1,24 +1,12 @@
 /*
- **************************************************************************
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include <linux/types.h>
 #include <linux/ip.h>
 #include <linux/inet.h>
+#include <net/gro.h>
 
 #include "fls_conn.h"
 #include "fls_def_sensor.h"
@@ -50,6 +38,8 @@ uint32_t fls_def_sensor_xxl_short;
 uint32_t fls_def_sensor_xxl_long;
 uint32_t fls_def_sensor_xxl_window;
 uint32_t fls_def_sensor_xl_window;
+uint32_t fls_def_sensor_sample_freq;
+struct hrtimer global_timer;
 
 static void fls_def_sensor_window_to_event_window(struct fls_def_sensor_window *orig_sw, struct fls_def_sensor_window *repl_sw, struct fls_def_event_window *ew)
 {
@@ -130,6 +120,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 
 	if (!conn->reverse) {
 		FLS_WARN("%p cannot create event for unidirectional flow.", conn);
+		atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_EXCEPTION_CANNOT_CREATE_EVENT_UNIDIR_FLOW]);
 		return;
 	}
 
@@ -191,7 +182,13 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 
 		if (sendevent && !fls_rfs_enqueue(&event)) {
 			FLS_WARN("XXL Event dropped!\n");
+			atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XXL_FAIL]);
+			atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XXL_FAIL]);
+		} else if (sendevent) {
+			atomic_inc(&orig->fls_conn_counters[FLS_CONN_RFS_ENQUEUE_XXL]);
+			atomic_inc(&reverse->fls_conn_counters[FLS_CONN_RFS_ENQUEUE_XXL]);
 		}
+
 		// enable sendevent for XXL only.
 		orig->stats.isd.sendevent = true;
 		reverse->stats.isd.sendevent = true;
@@ -218,6 +215,11 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 
 		if (sendevent && !fls_rfs_enqueue(&event)) {
 			FLS_WARN("XL Event dropped!\n");
+			atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XL_FAIL]);
+			atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XL_FAIL]);
+		} else if (sendevent) {
+			atomic_inc(&orig->fls_conn_counters[FLS_CONN_RFS_ENQUEUE_XL]);
+			atomic_inc(&reverse->fls_conn_counters[FLS_CONN_RFS_ENQUEUE_XL]);
 		}
 
 		orig->stats.isd.sendevent = true;
@@ -244,23 +246,31 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 
 	if (!fls_rfs_enqueue(&event)) {
 		FLS_WARN("Event dropped!\n");
+		atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_DEF_FAIL]);
+		atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_DEF_FAIL]);
+	} else {
+		atomic_inc(&orig->fls_conn_counters[FLS_CONN_RFS_EVENT_TYPE_DEF]);
+		atomic_inc(&reverse->fls_conn_counters[FLS_CONN_RFS_EVENT_TYPE_DEF]);
 	}
 }
 
-static void fls_def_sensor_bytes_record(struct fls_def_sensor_sample *sample, uint32_t bytes)
+static void fls_def_sensor_bytes_record(struct fls_def_sensor_sample *sample, uint32_t bytes, struct fls_gro_frag_stats gro_stats)
 {
+	uint32_t min_bytes = gro_stats.is_gro_skb ? gro_stats.min_bytes : bytes;
+	uint32_t max_bytes = gro_stats.is_gro_skb ? gro_stats.max_bytes : bytes;
+
 	if (sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets == 0) {
 		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes = bytes;
-		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min = bytes;
-		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max = bytes;
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min = min_bytes;
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max = max_bytes;
 		return;
 	}
 
 	sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes += bytes;
-	if (bytes < sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min) {
-		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min = bytes;
-	} else if (bytes > sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max) {
-		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max = bytes;
+	if (min_bytes < sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min) {
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_min = min_bytes;
+	} else if (max_bytes > sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max) {
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes_max = max_bytes;
 	}
 }
 
@@ -394,31 +404,467 @@ static void fls_def_sensor_window_close(struct fls_def_sensor_sample *sample, st
 	fls_def_sensor_burst_close(window);
 }
 
+/*
+ * Traverses the skb to analyze its GRO fragments.
+ * Calculates the minimum and maximum fragment sizes in the skb.
+ */
+int fls_def_traverse_gro_skb(struct sk_buff *skb, struct fls_gro_frag_stats *gro_stats) {
+	struct sk_buff *frag;
+	uint16_t min_frag_size = 0;
+	uint16_t max_frag_size = 0;
+	uint16_t frag_size = 0;
+	uint16_t frag_hdrlen = 0;
+	uint16_t last_frag_ip_id = 0;
+
+	/*
+	 * There are two cases that needs to be handled for GRO skb:
+	 * Case 1: Handle fragments in skb_shinfo(skb)->frag_list (chained fragments).
+	 * Case 2: Handle fragments in skb_shinfo(skb)->nr_frags (when page mode is enabled).
+	 * TODO: Case 2 is not handled in the current implementation.
+	 */
+
+	/*
+	 * Case 1: Handle fragments in skb_shinfo(skb)->frag_list.
+	 */
+
+	/*
+	 * Start with the head skb length as a fragment size (includes headers).
+	 */
+	min_frag_size = max_frag_size = skb_headlen(skb);
+
+	/*
+	 * Check if the skb contains a fragment list (skb_shinfo(skb)->frag_list).
+	 * It is typically used to determine whether the skb includes
+	 * additional data fragments beyond the linear data area.
+	 */
+	if (likely(skb_has_frag_list(skb))) {
+		/*
+		 * skb frag parsing
+		 */
+		skb_walk_frags(skb, frag) {
+			/*
+			 * The following logic calculates the header length in the fragment skb.
+			 * It is determined as follows:
+			 * frag->head: points to the start of the headroom.
+			 * frag->network_header: points to the network offset.
+			 * frag->data: points to the data start (which is the payload).
+			 * The header length includes both the IP and transport headers.
+			 */
+			frag_hdrlen = frag->data - (frag->head + frag->network_header);
+
+			/*
+			 * Calculate the total fragment size by adding the fragment length and header length.
+			 */
+			frag_size = frag->len + frag_hdrlen;
+
+			/*
+			 * Update min fragment size
+			 */
+			if (frag_size < min_frag_size) {
+				min_frag_size = frag_size;
+			}
+
+			/*
+			 * Update max fragment size
+			 */
+			if (frag_size > max_frag_size) {
+				max_frag_size = frag_size;
+			}
+
+			/*
+			 * Update the IP Header ID of the last fragment
+			 */
+			last_frag_ip_id = ntohs(ip_hdr(frag)->id);
+
+			FLS_TRACE("frag_len = %u, frag_hdrlen = %u, frag_size(total) = %u, min_frag_size = %u, max_frag_size = %u\n", frag->len, frag_hdrlen, frag_size, min_frag_size, max_frag_size);
+		}
+		/*
+		 * Update the final min, max frag sizes and last frag IP Header ID.
+		 */
+		gro_stats->min_bytes = min_frag_size;
+		gro_stats->max_bytes = max_frag_size;
+		gro_stats->last_frag_ip_id = last_frag_ip_id;
+
+		return 0;
+	} else if (skb_shinfo(skb)->nr_frags > 0) {
+		/*
+		 * TODO:
+		 * Case 2: Unhandled paged buffers case detected.
+		 */
+		FLS_WARN("Unhandled paged buffers (nr_frags=%d)\n", skb_shinfo(skb)->nr_frags);
+	} else {
+		/*
+		 * No fragments (neither frag_list nor nr_frags)
+		 * A case when skb is marked as GRO but contains only linear data.
+		 */
+		FLS_WARN("No fragments: (neither frag_list nor nr_frags)\n");
+	}
+
+	gro_stats->min_bytes = skb_headlen(skb);
+	gro_stats->max_bytes = skb_headlen(skb);
+	gro_stats->last_frag_ip_id = ntohs(ip_hdr(skb)->id);
+
+	return -1;
+}
+
+/*
+ * fls_def_sensor_delay_timer_callback()
+ *	Handler for when per connection delay finishes
+ */
+static enum hrtimer_restart fls_def_sensor_delay_timer_callback(struct hrtimer *timer)
+{
+	struct fls_def_sensor_timer_data *data = container_of(timer, struct fls_def_sensor_timer_data, timer);
+	struct fls_conn_cmn *cmn = data->cmn;
+	int i;
+	ktime_t kt;
+
+	/*
+	 * Handling delay is done
+	 */
+	FLS_INFO("%p Delay finished, starting data collection", cmn->orig);
+	cmn->orig->flags |= SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED;
+	cmn->reply->flags |= SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED;
+	fls_debug_print_conn_info(cmn->orig);
+
+	/*
+	 * Set flags and timers for default window data collection
+	 */
+	cmn->orig->stats.isd.sendevent = true;
+	cmn->reply->stats.isd.sendevent = true;
+
+	/*
+	 * For XL and XXL samples, Only the last window is opened for data collection
+	 */
+	cmn->orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+	cmn->reply->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+	cmn->orig->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+	cmn->reply->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
+
+	/*
+	 * Trigger Sample timer
+	 */
+	FLS_TRACE("trigger XL and XXL post delay\n");
+	kt = ms_to_ktime(fls_def_sensor_xl_window);
+
+	/*
+	 * Initialize window counter with 1, as we cannot divide by 0
+	 */
+	cmn->timers->xl_xxl_timer->flags = 1;
+	hrtimer_start(&cmn->timers->xl_xxl_timer->timer, kt, HRTIMER_MODE_REL);
+
+	for (i = 0; i < FLS_DEF_SENSOR_MAX_SAMPLE_COUNT; i++) {
+		int j;
+
+		for (j = 0; j < FLS_DEF_SENSOR_WINDOWS; j++) {
+			cmn->orig->stats.isd.samples[i].window[j].open = true;
+			cmn->reply->stats.isd.samples[i].window[j].open = true;
+		}
+	}
+
+	/*
+	 * Trigger timer for sample and window statistics division
+	 * This timer must be triggered last, as it contains the check to stop
+	 * recording data based on event count
+	 */
+	cmn->timers->window_timer->flags = 1 << (FLS_DEF_SENSOR_WINDOW_MIN);
+	FLS_TRACE("trigger window %d post delay\n", FLS_DEF_SENSOR_WINDOW_MIN);
+	kt = ms_to_ktime(fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_MIN]);
+	hrtimer_start(&cmn->timers->window_timer->timer, kt, HRTIMER_MODE_REL);
+	atomic_inc(&cmn->orig->fls_conn_counters[FLS_CONN_PER_CONN_DELAY_FINISHED]);
+	atomic_inc(&cmn->reply->fls_conn_counters[FLS_CONN_PER_CONN_DELAY_FINISHED]);
+
+	return HRTIMER_NORESTART;
+}
+
+/*
+ * fls_def_sensor_window_timer_callback()
+ *	Handler for when windows of windowed samples expire
+ */
+static enum hrtimer_restart fls_def_sensor_window_timer_callback(struct hrtimer *timer)
+{
+	struct fls_def_sensor_timer_data *data = container_of(timer, struct fls_def_sensor_timer_data, timer);
+	struct fls_conn_cmn *cmn;
+	uint32_t sample_index, window_time_diff;
+	uint8_t window_next, window_index;
+	ktime_t kt, now;
+
+	/*
+	 * Determine which window size triggered the CB
+	 */
+	if (data->flags & FLS_DEF_SENSOR_WINDOW_FLAG_SM) {
+		FLS_TRACE("Small window timer expired %p\n", data->timer);
+		window_index = 0;
+	} else if (data->flags & FLS_DEF_SENSOR_WINDOW_FLAG_MD) {
+		FLS_TRACE("Medium window timer expired %p\n", data->timer);
+		window_index = 1;
+	} else if (data->flags & FLS_DEF_SENSOR_WINDOW_FLAG_LG){
+		FLS_TRACE("Large window timer expired %p\n", data->timer);
+		window_index = FLS_DEF_SENSOR_WINDOW_LG;
+	} else {
+		FLS_ERROR("Invalid flags fed to window_timer_callback\n");
+		atomic_inc(&data->cmn->orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_INVALID_FLAGS_WINDOW_TIMER_CALLBACK]);
+		atomic_inc(&data->cmn->reply->fls_conn_exception_counters[FLS_CONN_EXCEPTION_INVALID_FLAGS_WINDOW_TIMER_CALLBACK]);
+		return HRTIMER_NORESTART;
+	}
+
+	/*
+	 * Fetch conn_cmn structure to reference connection instances
+	 */
+	cmn = data->cmn;
+
+	sample_index = cmn->orig->stats.isd.sample_index;
+	if (cmn->orig->stats.isd.samples[sample_index].window[window_index].open) {
+		fls_def_sensor_window_close(&cmn->orig->stats.isd.samples[sample_index], &cmn->orig->stats.isd.samples[sample_index].window[window_index]);
+	} else {
+		FLS_WARN("%p Invalid Window Close Call, sample index: %u, window_index: %u \n", cmn->orig, sample_index, window_index);
+	}
+
+	if (cmn->reply->stats.isd.samples[sample_index].window[window_index].open) {
+		fls_def_sensor_window_close(&cmn->reply->stats.isd.samples[sample_index], &cmn->reply->stats.isd.samples[sample_index].window[window_index]);
+	} else {
+		FLS_WARN("%p Invalid Reply Window Close Call, sample index: %u, window_index: %u \n", cmn->reply, sample_index, window_index);
+	}
+
+	/*
+	 * If the largest sample has closed start a new one
+	 */
+	if (window_index == FLS_DEF_SENSOR_WINDOW_LG) {
+		/*
+		 * Check if HWM was exceeded
+		 */
+		if ((fls_def_sensor_pkts_hwm && (cmn->orig->stats.isd.samples[sample_index].window[window_index].packets >= fls_def_sensor_pkts_hwm ||
+			cmn->reply->stats.isd.samples[sample_index].window[window_index].packets >= fls_def_sensor_pkts_hwm)) ||
+			(fls_def_sensor_bytes_hwm && ((cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes >= fls_def_sensor_bytes_hwm) ||
+			cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes >= fls_def_sensor_bytes_hwm))) {
+			FLS_WARN("%p HWM exceeded. orig_pkts=%u reply_pkts= %u pkt_hwm=%u, orig_bytes=%u reply_bytes=%u bytes_hwm=%u", cmn->orig, cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].packets,
+					cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].packets,fls_def_sensor_pkts_hwm, cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes,
+					cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes, fls_def_sensor_bytes_hwm);
+			atomic_inc(&cmn->orig->fls_conn_exception_counters[FLS_CONN_SENSOR_HWM_EXCEEDED]);
+			atomic_inc(&cmn->reply->fls_conn_exception_counters[FLS_CONN_SENSOR_HWM_EXCEEDED]);
+			cmn->orig->flags = SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
+			cmn->reply->flags = SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
+			return HRTIMER_NORESTART;
+		}
+
+		/*
+		 * Increase the sample index, as we have filled all windows of this sample
+		 */
+		sample_index += 1;
+		FLS_TRACE("%p increased sample_index to %u", cmn->orig, sample_index);
+
+		/*
+		 * Handling if we have fully filled an event
+		 */
+		if (sample_index > fls_def_sensor_sample_count - 1) {
+			/*
+		 	 * Create a new event
+		 	 */
+			now = ktime_get_boottime();
+			FLS_WARN("%p Create Default event, t = %lld, [%pI4:%hu -> %pI4:%hu] proto = %u]", cmn->orig, now,
+				cmn->orig->src_ip, ntohs(cmn->orig->src_port), cmn->orig->dest_ip, ntohs(cmn->orig->dest_port),
+				cmn->orig->protocol);
+			fls_def_sensor_event_create(cmn->orig, now, FLS_RFS_EVENT_TYPE_DEF);
+			cmn->orig->stats.isd.events++;
+			cmn->reply->stats.isd.events++;
+
+			/*
+		 	 * If we have a nonnegative max event count and have exceeded it, disable this connection and return;
+			 */
+			if ((fls_def_sensor_max_events >= 0) && (cmn->orig->stats.isd.events >= fls_def_sensor_max_events)) {
+				FLS_TRACE("Exceeded max event count, disabling connection %p\n", cmn->orig->flags);
+				atomic_inc(&cmn->orig->fls_conn_exception_counters[FLS_CONN_SENSOR_MAX_EVENT_EXCEEDED]);
+				atomic_inc(&cmn->reply->fls_conn_exception_counters[FLS_CONN_SENSOR_MAX_EVENT_EXCEEDED]);
+				cmn->orig->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+				cmn->reply->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+				return HRTIMER_NORESTART;
+			}
+			sample_index = 0;
+		}
+
+		cmn->orig->stats.isd.sample_index = sample_index;
+		cmn->reply->stats.isd.sample_index = sample_index;
+
+		/*
+		 * Reset the window index
+		 */
+		window_time_diff = fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_MIN];
+		window_index = FLS_DEF_SENSOR_WINDOW_MIN;
+	} else {
+		/*
+		 * Trigger the timer using the diff between the time elapsed and the length of the next window;
+		 */
+		window_time_diff = fls_def_sensor_window_sz[window_index + 1] - fls_def_sensor_window_sz[window_index];
+		window_index++;
+	}
+
+	/*
+	 * Increment flags to the next window
+	 */
+	window_next = 1 << (window_index);
+
+	/*
+ 	 * Timer call for the next window
+	 */
+	cmn->timers->window_timer->flags = window_next;
+	kt = ms_to_ktime(window_time_diff);
+	hrtimer_forward_now(timer, kt);
+
+	return HRTIMER_RESTART;
+}
+
+/*
+ * fls_def_sensor_sampler_timer_callback()
+ *	Handler for when samples of non-windowed samples expire
+ */
+static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer *timer)
+{
+	struct fls_def_sensor_timer_data *data = container_of(timer, struct fls_def_sensor_timer_data, timer);
+	struct fls_conn_cmn *cmn;
+	ktime_t kt, now;
+	uint32_t quotient, remainder;
+
+	cmn = data->cmn;
+
+	if (!(cmn->orig->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE) || !(cmn->reply->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
+		FLS_INFO("%p: Defer XL or XXL event create due to stats collection disabled\n", cmn->orig);
+		return HRTIMER_NORESTART;
+	}
+
+	/*
+	 * The timer will trigger at a frequency of the
+	 * greatest common factor between the xl and xxl
+	 * windows. To determine if enough calls of this timer
+	 * at a frequency of fls_def_sensor_sample_freq
+	 * have occured to call either the xl or xxl timer,
+	 * the window frequency is divided by the window count.
+	 */
+	quotient = fls_def_sensor_xl_window / data->flags;
+	remainder = fls_def_sensor_xl_window % data->flags;
+	if (quotient == fls_def_sensor_sample_freq && remainder == 0) {
+		FLS_TRACE("xl sample timer expired %p\n", data->timer);
+
+		/*
+	 	 * No need to invoke window_close function
+	 	 * since WINDOW_LG itself is used for X large samples.
+		 */
+		if (fls_def_sensor_burst) {
+			fls_def_sensor_burst_close(&cmn->orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
+			fls_def_sensor_burst_close(&cmn->reply->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
+			FLS_TRACE("%px Sending XL window: original burst_cnt = %d, reply_cnt %d\n", cmn->orig, cmn->orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts,cmn->reply->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
+		}
+
+		now = ktime_get_boottime();
+		FLS_WARN("%p Create XL event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[proto = %u]", cmn->orig, now,
+			cmn->orig->src_ip, ntohs(cmn->orig->src_port), cmn->orig->dest_ip, ntohs(cmn->orig->dest_port),
+			cmn->orig->protocol);
+		fls_def_sensor_event_create(cmn->orig, now, FLS_RFS_EVENT_TYPE_XL);
+	}
+
+	/*
+	 * The timer will trigger at a frequency of the
+	 * greatest common factor between the xl and xxl
+	 * windows. To determine if enough calls of this timer
+	 * at a frequency of fls_def_sensor_sample_freq
+	 * have occured to call either the xl or xxl timer,
+	 * the window frequency is divided by the window count.
+	 */
+	quotient = fls_def_sensor_xxl_window / data->flags;
+	remainder = fls_def_sensor_xxl_window % data->flags;
+	if (quotient == fls_def_sensor_sample_freq && remainder == 0) {
+		FLS_TRACE("xxl sample timer expired %p\n", data->timer);
+
+		/*
+	 	 * No need to invoke window_close function
+	 	 * since WINDOW_LG itself is used for XX large samples.
+		 */
+		if (fls_def_sensor_burst) {
+			fls_def_sensor_burst_close(&cmn->orig->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
+			fls_def_sensor_burst_close(&cmn->reply->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
+			FLS_TRACE("%px Sending XL window: original burst_cnt = %d, reply_cnt %d\n", cmn->orig, cmn->orig->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts,cmn->reply->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
+		}
+
+		now = ktime_get_boottime();
+		FLS_WARN("%p Create XXL event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[proto = %u]", cmn->orig, now,
+			cmn->orig->src_ip, ntohs(cmn->orig->src_port), cmn->orig->dest_ip, ntohs(cmn->orig->dest_port),
+			cmn->orig->protocol);
+		fls_def_sensor_event_create(cmn->orig, now, FLS_RFS_EVENT_TYPE_XXL);
+		data->flags = 0;
+	}
+
+	data->flags++;
+	kt = ms_to_ktime(fls_def_sensor_sample_freq);
+	hrtimer_forward_now(timer, kt);
+
+	/*
+	 * When HRTIMER_NORESTART is returned from the window timer
+	 * the sample timer is automatically cancelled by fls_def_sensor_timer_delete
+	 * thus there is no need for a norestart return value
+	 */
+	return HRTIMER_RESTART;
+}
+
+void fls_def_sensor_timer_delete(struct fls_conn *conn)
+{
+	if (!conn->cmn) {
+		return;
+	}
+
+	if (conn->cmn->timers->delay_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->delay_timer->timer);
+		conn->cmn->timers->delay_timer->timer.function = NULL;
+	}
+
+	if (conn->cmn->timers->window_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->window_timer->timer);
+		conn->cmn->timers->window_timer->timer.function = NULL;
+	}
+	if (conn->cmn->timers->xl_xxl_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->xl_xxl_timer->timer);
+		conn->cmn->timers->xl_xxl_timer->timer.function = NULL;
+	}
+	atomic_inc(&conn->fls_conn_counters[FLS_CONN_TIMER_DELETE]);
+}
+
 uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb)
 {
-	ktime_t now;
+	ktime_t now, kt;
 	uint32_t sample_index;
 	struct fls_def_sensor_sample *sample;
 	struct fls_def_sensor_sample *xxl_sample;
 	struct fls_def_sensor_sample *xl_sample;
 	uint32_t delay = fls_def_sensor_delay;
 	uint32_t sample_length = fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_LG];
-	int64_t sample_diff, xxl_diff, xl_diff;
-	int i;
+	struct fls_gro_frag_stats gro_stats = {0};
+	int i, ret = 0;
 
 	if (fls_def_sensor_max_events == 0 || sample_length == 0) {
 		FLS_TRACE("%p Default sensor disabled.\n", conn);
-		return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
-	}
-
-	if (!(conn->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
-		FLS_TRACE("%p Statistics disabled.\n", conn);
+		atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_EXCEPTION_DEFAULT_SENSOR_DISABLED]);
 		return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
 	}
 
 	if (unlikely(conn->flags == SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED)) {
 		FLS_TRACE("%p HWM exceeded, Statistics disabled.\n", conn);
+
+		/*
+		 * Kill any active timers
+		 */
+		fls_def_sensor_timer_delete(conn);
+		atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_SENSOR_HWM_EXCEEDED]);
+
 		return SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
+	}
+
+	if (!(conn->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
+		FLS_TRACE("%p Statistics disabled.\n", conn);
+
+		/*
+		 * Kill any active timers
+		 */
+		fls_def_sensor_timer_delete(conn);
+		atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_EXCEPTION_DEFAULT_SENSOR_DISABLED]);
+
+		return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
 	}
 
 	if(conn->externalrule) {
@@ -427,273 +873,61 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 	} else {
 		now = ktime_get_boottime();
 	}
+
+	/*
+	 * If check will trigger delay timer when first packet is recieved
+	 */
 	if (!conn->stats.isd.first_packet_time) {
 		FLS_WARN("%p First packet. t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
 			conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
 			ip_hdr(skb)->protocol);
-
+		conn->stats.isd.first_packet_time = now;
+		conn->reverse->stats.isd.first_packet_time = now;
 		fls_debug_print_conn_info(conn);
 
-		conn->stats.isd.first_packet_time = now;
-		conn->stats.isd.event_start_time = now;
-		conn->stats.isd.samples[0].sample_start_time = now;
-
-		/* Initializing X large and XL large window. */
-		conn->stats.isd.xxl_sample.sample_start_time = now;
-		conn->stats.isd.xl_sample.sample_start_time = now;
-		conn->stats.isd.sendevent = true;
-
-		for (i = 0; i < FLS_DEF_SENSOR_MAX_SAMPLE_COUNT; i++) {
-			int j;
-
-			for (j = 0; j < FLS_DEF_SENSOR_WINDOWS; j++) {
-				conn->stats.isd.samples[i].window[j].open = true;
-			}
-		}
-
-		/*
-		 * For XXL sample, Only the last window is opened for data collection
-		 */
-		FLS_WARN("%p start XXL window, t = %lld \n", conn, now);
-		conn->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
-
-		/*
-		 * For XL sample, Only the last window is opened for data collection
-		 * since only one window is needed
-		 */
-		FLS_WARN("%p start XL window, t = %lld \n", conn, now);
-		conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
-
-		if (conn->reverse) {
-			struct fls_conn *reverse = conn->reverse;
-			reverse->stats.isd.first_packet_time = now;
-			reverse->stats.isd.event_start_time = now;
-			reverse->stats.isd.samples[0].sample_start_time = now;
-			reverse->stats.isd.xxl_sample.sample_start_time = now;
-			reverse->stats.isd.xl_sample.sample_start_time = now;
-			reverse->stats.isd.sendevent = true;
-
-			for (i = 0; i < FLS_DEF_SENSOR_MAX_SAMPLE_COUNT; i++) {
-				int j;
-
-				for (j = 0; j < FLS_DEF_SENSOR_WINDOWS; j++) {
-					reverse->stats.isd.samples[i].window[j].open = true;
-				}
-			}
-
-			reverse->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
-			reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open = true;
-		}
+		kt = ms_to_ktime(delay);
+		hrtimer_start(&conn->cmn->timers->delay_timer->timer, kt, HRTIMER_MODE_REL);
 	}
 
+	/*
+	 * Bail from the function if the delay period has not passed
+	 */
 	if (!(conn->flags & SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED)) {
-		uint64_t diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.first_packet_time));
-		if (diff < delay) {
-			return SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-		}
-
-		conn->flags |= SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED;
-		FLS_WARN("%p Delay finished, starting data collection, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]",
-			conn, now, &conn->src_ip, ntohs(conn->src_port), &conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
-			ip_hdr(skb)->protocol);
-		conn->stats.isd.first_packet_time = now;
-		conn->stats.isd.event_start_time = now;
-		conn->stats.isd.samples[0].sample_start_time = now;
-		conn->stats.isd.xxl_sample.sample_start_time = now;
-		conn->stats.isd.xl_sample.sample_start_time = now;
-
-		if (conn->reverse) {
-			conn->reverse->flags |= SFE_FLS_CONNECTION_FLAG_DELAY_FINISHED;
-			conn->reverse->stats.isd.first_packet_time = now;
-			conn->reverse->stats.isd.event_start_time = now;
-			conn->reverse->stats.isd.samples[0].sample_start_time = now;
-			conn->reverse->stats.isd.xxl_sample.sample_start_time = now;
-			conn->reverse->stats.isd.xl_sample.sample_start_time = now;
-		}
-
-		fls_debug_print_conn_info(conn);
+		return SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 	}
 
 	sample_index = conn->stats.isd.sample_index;
-	sample_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.samples[sample_index].sample_start_time));
-	for (i = 0; i < FLS_DEF_SENSOR_WINDOW_LG; i++) {
-		if (sample_diff >= fls_def_sensor_window_sz[i] && conn->stats.isd.samples[sample_index].window[i].open) {
-			fls_def_sensor_window_close(&conn->stats.isd.samples[sample_index], &conn->stats.isd.samples[sample_index].window[i]);
-			if (conn->reverse) {
-				fls_def_sensor_window_close(&conn->reverse->stats.isd.samples[sample_index], &conn->reverse->stats.isd.samples[sample_index].window[i]);
-			}
-		}
-	}
-
-	/*
-	 * If the time is past the end of the current sample, we need to start a new sample.
-	 */
-	if (sample_diff >= sample_length) {
-		/*
-		 * Check if sample exceeds watermark
-		 */
-		sample = &(conn->stats.isd.samples[sample_index]);
-		if ((fls_def_sensor_pkts_hwm && sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets >= fls_def_sensor_pkts_hwm) || (fls_def_sensor_bytes_hwm && sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes >= fls_def_sensor_bytes_hwm)) {
-			FLS_INFO("%p HWM exceeded. pkts=%u pkt_hwm=%u, bytes=%u bytes_hwm=%u", conn, sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets, fls_def_sensor_pkts_hwm, sample->window[FLS_DEF_SENSOR_WINDOW_LG].bytes, fls_def_sensor_bytes_hwm);
-			conn->flags = SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
-			if (conn->reverse) {
-				conn->reverse->flags = SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
-			}
-			return SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
-		}
-
-		if (fls_def_sensor_burst) {
-			fls_def_sensor_burst_close(&conn->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG]);
-			if (conn->reverse) {
-				fls_def_sensor_burst_close(&conn->reverse->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG]);
-			}
-		}
-
-		sample_index += 1;
-		FLS_TRACE("%p increased sample_index to %u", conn, sample_index);
-
-		if (sample_index < fls_def_sensor_sample_count) {
-			conn->stats.isd.samples[sample_index].sample_start_time = now;
-			if (conn->reverse) {
-				conn->reverse->stats.isd.samples[sample_index].sample_start_time = now;
-			}
-		}
-	}
-
-	if (conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open) {
-		xl_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.xl_sample.sample_start_time));
-		if(xl_diff >= fls_def_sensor_xl_window) {
-			/*
-			 * No need to invoke window_close function
-			 * since WINDOW_LG itself is used for X large samples.
-			 */
-			if (fls_def_sensor_burst) {
-				fls_def_sensor_burst_close(&conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
-				if (conn->reverse) {
-					fls_def_sensor_burst_close(&conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
-					FLS_TRACE("%px Sending XL window: original burst_cnt = %d, reply_cnt %d\n",
-							conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts,
-							conn->reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
-				} else {
-					FLS_TRACE("%px Sending XL window: original burst_cnt = %d\n",
-							conn, conn->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
-				}
-			}
-			FLS_WARN("%p Create XL event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
-				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
-				ip_hdr(skb)->protocol);
-			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_XL);
-		}
-	}
-
-	if (conn->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].open) {
-		xxl_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.xxl_sample.sample_start_time));
-		if(xxl_diff >= fls_def_sensor_xxl_window) {
-
-			/*
-			 * No need to invoke window_close function
-			 * since WINDOW_LG itself is used for X large samples.
-			 */
-			if (fls_def_sensor_burst) {
-				fls_def_sensor_burst_close(&conn->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
-				if (conn->reverse) {
-					fls_def_sensor_burst_close(&conn->reverse->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG]);
-					FLS_TRACE("%px Sending XXL window: original burst_cnt = %d, reply_cnt %d\n", conn, conn->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts,conn->reverse->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
-				} else {
-					FLS_TRACE("%px Sending XXL window: original burst_cnt = %d\n", conn, conn->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG].bursts);
-				}
-			}
-
-			FLS_WARN("%p Create XXL event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
-				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
-				ip_hdr(skb)->protocol);
-			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_XXL);
-		}
-	}
-
-	/*
-	 * If we've already generated enough samples, it's time to create a new event
-	 */
-	if (sample_index >= fls_def_sensor_sample_count) {
-		int32_t abs_diff = ktime_to_ms(ktime_sub(now, conn->stats.isd.first_packet_time));
-		uint32_t event_count;
-		ktime_t event_start_new;
-
-		/*
-		 * Calculate the index of the event to be written.
-		 */
-		if (fls_def_sensor_dynamic_samples) {
-			event_count = conn->stats.isd.events + 1;
-			event_start_new = now;
-		} else {
-			event_count = abs_diff / FLS_DEF_SENSOR_TOTAL_TIME;
-			event_start_new = ktime_add_ms(conn->stats.isd.event_start_time, (event_count - conn->stats.isd.events) * FLS_DEF_SENSOR_TOTAL_TIME);
-		}
-
-		/*
-		 * If the calculated event index is greater than the index of the last generated event, generate a new event.
-		 */
-		if ((event_count > conn->stats.isd.events)) {
-			struct fls_conn *reply = conn->reverse;
-
-			FLS_WARN("%p Create Default event, t = %lld, [%pI4:%hu -> %pI4:%hu] IP Header[id = %u, proto = %u]", conn, now,
-				conn->src_ip, ntohs(conn->src_port), conn->dest_ip, ntohs(conn->dest_port), ntohs(ip_hdr(skb)->id),
-				ip_hdr(skb)->protocol);
-			fls_def_sensor_event_create(conn, now, FLS_RFS_EVENT_TYPE_DEF);
-			conn->stats.isd.events = event_count;
-			if (reply) {
-				reply->stats.isd.events = event_count;
-			}
-
-			/*
-			 * If we have a nonnegative max event count and have passed it, disable this connection and return.
-			 */
-			if ((fls_def_sensor_max_events >= 0) && (event_count >= fls_def_sensor_max_events)) {
-				conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-				if (reply) {
-					reply->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-				}
-
-				return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
-			}
-
-			conn->stats.isd.event_start_time = event_start_new;
-			if (conn->stats.isd.event_start_time > now) {
-				FLS_WARN("Advanced time too far, now=%lli, event_start=%lli", now, conn->stats.isd.event_start_time);
-			}
-
-			if (reply) {
-				reply->stats.isd.event_start_time = conn->stats.isd.event_start_time;
-			}
-
-			sample_index = 0;
-			conn->stats.isd.samples[sample_index].sample_start_time = now;
-
-			if (reply) {
-				reply->stats.isd.samples[sample_index].sample_start_time = now;
-			}
-		}
-	}
-
-	conn->stats.isd.sample_index = sample_index;
-
+	sample = &(conn->stats.isd.samples[sample_index]);
+	xl_sample = &(conn->stats.isd.xl_sample);
 	xxl_sample = &(conn->stats.isd.xxl_sample);
 
-	xl_sample = &(conn->stats.isd.xl_sample);
+	/*
+	 * For GRO skbs, retrieve the fragment count and add it to the packet count.
+	 * Also, determine the minimum and maximum fragment sizes to update the min and max byte values.
+	 */
+	if (skb_is_gso(skb)) {
+		gro_stats.frags_count = NAPI_GRO_CB(skb)->count;
+		gro_stats.is_gro_skb = true;
 
-	if (conn->reverse) {
-		conn->reverse->stats.isd.sample_index = sample_index;
+		FLS_TRACE("%p: skb_is_gso, gso_size(mss) = %u, GRO fragments count: %u, nr_frags = %d, gso_segs = %u\n", skb, skb_shinfo(skb)->gso_size, gro_stats.frags_count, skb_shinfo(skb)->nr_frags, skb_shinfo(skb)->gso_segs);
+		FLS_TRACE("%p: skb_is_gso, skb->len = %u, skb->data_len = %u, skb->headlen = %u\n", skb, skb->len, skb->data_len, skb_headlen(skb));
+
+		ret = fls_def_traverse_gro_skb(skb, &gro_stats);
+		if (ret) {
+			FLS_ERROR("%p: Failed to traverse GRO skb, continue with head skb\n", skb);
+		}
+
+		FLS_TRACE("Minimum fragment size: %u\n", gro_stats.min_bytes);
+		FLS_TRACE("Maximum fragment size: %u\n", gro_stats.max_bytes);
 	}
-
-	sample = &(conn->stats.isd.samples[sample_index]);
 
 	/* Record window data, along with XXL/XL window if it is open. */
 	if (fls_def_sensor_bytes) {
-		fls_def_sensor_bytes_record(sample, skb->len);
-		if(xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
-			fls_def_sensor_bytes_record(xxl_sample, skb->len);
-		if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
-			fls_def_sensor_bytes_record(xl_sample, skb->len);
+		fls_def_sensor_bytes_record(sample, skb->len, gro_stats);
+		if (xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			fls_def_sensor_bytes_record(xxl_sample, skb->len, gro_stats);
+		if (xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			fls_def_sensor_bytes_record(xl_sample, skb->len, gro_stats);
 	}
 
 	if (fls_def_sensor_ipat) {
@@ -720,14 +954,48 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		}
 	}
 
-	sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
-	if(xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
-		xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+	if ((gro_stats.is_gro_skb) && (skb_shinfo(skb)->nr_frags == 0)) {
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets += gro_stats.frags_count;
+		if (xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets += gro_stats.frags_count;
 
-	if(xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
-		xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+		if (xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets += gro_stats.frags_count;
+	} else {
+		sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+		if (xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			xxl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+
+		if (xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].open)
+			xl_sample->window[FLS_DEF_SENSOR_WINDOW_LG].packets++;
+	}
 
 	return SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+}
+
+/*
+ * fls_def_sensor_timer_init
+ *	Initializes common timers used by fls def sensor callback
+ */
+void fls_def_sensor_timer_init(struct fls_def_sensor_timers *timers)
+{
+	/*
+	 * Initialize delay timer
+	 */
+	hrtimer_init(&timers->delay_timer->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	timers->delay_timer->timer.function = &fls_def_sensor_delay_timer_callback;
+
+	/*
+	 * Initialize standard window timer
+	 */
+	hrtimer_init(&timers->window_timer->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	timers->window_timer->timer.function = &fls_def_sensor_window_timer_callback;
+
+	/*
+	 * Initialize large window timer
+	 */
+	hrtimer_init(&timers->xl_xxl_timer->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	timers->xl_xxl_timer->timer.function = &fls_def_sensor_sample_timer_callback;
 }
 
 bool fls_def_sensor_init(struct fls_sensor_manager *fsm)

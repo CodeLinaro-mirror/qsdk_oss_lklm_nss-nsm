@@ -1,19 +1,6 @@
 /*
- **************************************************************************
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #define FLS_RFS_EVENT_MAX 128
@@ -41,23 +28,78 @@ struct fls_event_log {
 
 static struct fls_rfs rfs;
 
+atomic_t fls_rfs_active = ATOMIC_INIT(0);
 struct delayed_work fls_rfs_work;
 struct workqueue_struct * fls_rfs_workqueue;
 static struct fls_event_log event_log;
 static char buf[sizeof(struct fls_rfs_telemetry_agent_header) + sizeof(struct fls_event)];
 
+void fls_rfs_clean_events(void)
+{
+	unsigned long irqflags_write, irqflags_read;
+
+	if (atomic_read(&fls_rfs_active) == 0) {
+		FLS_WARN("Clean events failed. RFS inactive.\n");
+		return;
+	}
+
+	spin_lock_irqsave(&event_log.read_lock, irqflags_read);
+
+	if (event_log.read_index == event_log.write_index) {
+		spin_unlock_irqrestore(&event_log.read_lock, irqflags_read);
+		FLS_ERROR("Event log is empty. read_index:%d, write_index:%d\n", event_log.read_index, event_log.write_index);
+		return;
+	}
+
+	spin_unlock_irqrestore(&event_log.read_lock, irqflags_read);
+
+	spin_lock_irqsave(&event_log.write_lock, irqflags_write);
+
+	memset(event_log.event_ring_buf, 0, sizeof(event_log.event_ring_buf));
+	printk("Flushed FLS rfs ring buffer, WI = %u, RI = %u", event_log.write_index, event_log.read_index);
+	event_log.write_index = 0;
+
+	spin_unlock_irqrestore(&event_log.write_lock, irqflags_write);
+
+	/*
+	 * It is best to reset write then read. If a race to acquire read_lock,
+	 * between fls_rfs_clean_events() and fls_rfs_write() is won by fls_rfs_write(),
+	 * a 0 filled buffer will be sent to userspace. This can easily be mitigated with
+	 * filtering in userspace. If read were to be reset prior to write, it is possible
+	 * the same event could be sent to userspace twice.
+	 */
+	spin_lock_irqsave(&event_log.read_lock, irqflags_read);
+
+	event_log.read_index = 0;
+
+	spin_unlock_irqrestore(&event_log.read_lock, irqflags_read);
+}
+
 void fls_rfs_write(struct work_struct *work) {
 	unsigned long irqflags;
+
+	if (atomic_read(&fls_rfs_active) == 0) {
+		FLS_WARN("Write failed. RFS inactive.\n");
+		return;
+	}
+
+	if (!rfs.rfschan) {
+		FLS_ERROR("RFS channel not initialized, skipping write\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_CHANNEL_NOT_INIT]);
+		return;
+	}
 
 	spin_lock_irqsave(&event_log.read_lock, irqflags);
 
 	if (relay_buf_full(rfs.rbuf)) {
 		FLS_TRACE("RFS Buffer is Full, did not write\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_BUFF_FULL]);
 		goto queue_work;
 	}
 
 	if (event_log.read_index == event_log.write_index) {
 		spin_unlock_irqrestore(&event_log.read_lock, irqflags);
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_EXCEPTION_NO_EVENT_PENDING]);
 		FLS_ERROR("Event log is empty. read_index:%d, write_index:%d\n", event_log.read_index, event_log.write_index);
 		return;
 	}
@@ -75,7 +117,7 @@ queue_work:
 	 * we should continue to queue work, so to ensure that we will attempt
 	 * to write again and aren't dependent on the enqueue() event
 	 */
-	if (event_log.read_index != event_log.write_index) {
+	if (event_log.read_index != event_log.write_index && atomic_read(&fls_rfs_active) == 1) {
 		queue_delayed_work(fls_rfs_workqueue, &fls_rfs_work, FLS_RFS_WRITE_DELAY);
 	}
 
@@ -87,12 +129,18 @@ bool fls_rfs_enqueue(struct fls_event *event)
 	unsigned long irqflags;
 	uint32_t write_index;
 
+	if (atomic_read(&fls_rfs_active) == 0) {
+		FLS_WARN("FLS RFS enqueue failed. RFS inactive.\n");
+		return false;
+	}
+
 	FLS_INFO("FID: enqueue flow event.");
 	fls_debug_print_event_info(event);
 
 	spin_lock_irqsave(&event_log.write_lock, irqflags);
 	if (((event_log.write_index + 1) & FLS_RFS_EVENT_MASK) == event_log.read_index) {
 		spin_unlock_irqrestore(&event_log.write_lock, irqflags);
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_EXCEPTION_EVENT_QUEUE_FULL]);
 		return false;
 	}
 
@@ -127,15 +175,40 @@ static void fls_rfs_tele_agent_header_fill(struct fls_rfs_telemetry_agent_header
 
 void fls_rfs_shutdown(void)
 {
-	if (rfs.rfschan) {
-		relay_close(rfs.rfschan);
+	atomic_set(&fls_rfs_active, 0);
+
+	/*
+	 * Stop scheduling and wait for in‑flight work to finish
+	 */
+	if (fls_rfs_workqueue) {
+		cancel_delayed_work_sync(&fls_rfs_work);
+		flush_workqueue(fls_rfs_workqueue);
 	}
 
-	debugfs_remove_recursive(rfs.de);
-	rfs.de = NULL;
+	/*
+	 * Close the relay channel
+	 */
+	if (rfs.rfschan) {
+		relay_close(rfs.rfschan);
+		rfs.rfschan = NULL;
+	}
 
-	cancel_delayed_work_sync(&fls_rfs_work);
-	destroy_workqueue(fls_rfs_workqueue);
+	/*
+	 * Tear down debugfs
+	 */
+	if (rfs.de) {
+		debugfs_remove_recursive(rfs.de);
+		rfs.de = NULL;
+		fls_debug_root_dir = NULL;
+	}
+
+	/*
+	 * Destroy workqueue
+	 */
+	if (fls_rfs_workqueue) {
+		destroy_workqueue(fls_rfs_workqueue);
+		fls_rfs_workqueue = NULL;
+	}
 }
 
 static int fls_rfs_remove_buf_file_handler(struct dentry *dentry)
@@ -175,9 +248,13 @@ int fls_rfs_init(void)
 	spin_lock_init(&event_log.read_lock);
 	spin_lock_init(&event_log.write_lock);
 
-	rfs.de = debugfs_create_dir(FLS_RFS_NAME, NULL);
-	if (rfs.de == NULL)
+	fls_debug_root_dir = debugfs_create_dir(FLS_RFS_NAME, NULL);
+	rfs.de = fls_debug_root_dir;
+	if (IS_ERR_OR_NULL(rfs.de)) {
+		rfs.de = NULL;
+		fls_debug_root_dir = NULL;
 		return -EPERM;
+	}
 
 	rfs.rfschan = relay_open("fls_ifli",
 		rfs.de,
@@ -186,18 +263,25 @@ int fls_rfs_init(void)
 	if (!rfs.rfschan) {
 		debugfs_remove_recursive(rfs.de);
 		rfs.de = NULL;
+		fls_debug_root_dir = NULL;
 		return -EPERM;
 	}
 
 	fls_rfs_workqueue = create_singlethread_workqueue("fls_rfs_workqueue");
 	if(!fls_rfs_workqueue) {
 		FLS_WARN("Failed to initialize FLS RFS workqueue\n");
-		return false;
+		relay_close(rfs.rfschan);
+		rfs.rfschan = NULL;
+		debugfs_remove_recursive(rfs.de);
+		rfs.de = NULL;
+		fls_debug_root_dir = NULL;
+		return -ENOMEM;
 	}
 
 	fls_rfs_tele_agent_header_fill(&tah);
 
 	INIT_DELAYED_WORK(&fls_rfs_work, fls_rfs_write);
+	atomic_set(&fls_rfs_active, 1);
 
 	return 0;
 }

@@ -27,7 +27,7 @@
 #include "fls_def_sensor.h"
 
 #define FLS_RFS_NAME "fls"
-#define FLS_RFS_SAMPLES_MAX 10
+#define FLS_RFS_SAMPLES_MAX 5
 #define FLS_RFS_WINDOWS_MAX 3
 #define FLS_RFS_EVENTS_LIMIT 5
 #define FLS_RFS_TELEMETRY_DATA_TYPE 2
@@ -131,5 +131,6 @@ struct fls_rfs_telemetry_agent_header
 bool fls_rfs_enqueue(struct fls_event *event);
 void fls_rfs_shutdown(void);
 int fls_rfs_init(void);
+void fls_rfs_clean_events(void);
 
 #endif

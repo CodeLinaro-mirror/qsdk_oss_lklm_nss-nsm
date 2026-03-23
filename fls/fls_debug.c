@@ -1,19 +1,6 @@
 /*
- **************************************************************************
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include <linux/sysctl.h>
@@ -21,6 +8,7 @@
 #include <linux/proc_fs.h>
 #include "fls_debug.h"
 #include "fls_flow.h"
+#include "fls_stats.h"
 
 #define FLS_DEBUG_LEVEL_DEFAULT FLS_DEBUG_LEVEL_ERROR
 
@@ -49,7 +37,34 @@ static uint32_t fls_debug_sample_count_max = FLS_DEF_SENSOR_MAX_SAMPLE_COUNT;
 static uint32_t fls_debug_bool_min = 0;
 static uint32_t fls_debug_bool_max = 1;
 
-DEFINE_SPINLOCK(fls_conn_lock);
+/*
+ * fls_debug_sample_timer_freq_handler()
+ *	Handler to calculate the timer frequency of fls_def_sensor_sample_timer
+ */
+static int fls_debug_sample_timer_freq_handler(struct ctl_table *table, int write, void __user *buffer, size_t *lenp, loff_t *ppos) {
+	int ret;
+	uint32_t tmp_xl, tmp_xxl, tmp;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+
+	if (write) {
+		/*
+		 * Find greatest common factor using Euclidean method
+		 */
+		tmp_xl = fls_def_sensor_xl_window;
+		tmp_xxl = fls_def_sensor_xxl_window;
+		while(tmp_xxl != 0) {
+			tmp = tmp_xxl;
+			tmp_xxl = tmp_xl % tmp_xxl;
+			tmp_xl = tmp;
+		}
+		fls_def_sensor_sample_freq = tmp_xl;
+
+		FLS_INFO("XL/XXL sample Frequency: %u\n", fls_def_sensor_sample_freq);
+    	}
+
+	return ret;
+}
 
 static struct ctl_table fls_debug_table[] = {
 	{
@@ -188,7 +203,7 @@ static struct ctl_table fls_debug_table[] = {
 		.data		= &fls_def_sensor_xxl_window,
 		.maxlen		= sizeof(fls_def_sensor_xxl_window),
 		.mode		= 0644,
-		.proc_handler	= &proc_douintvec,
+		.proc_handler	= fls_debug_sample_timer_freq_handler,
 	},
 	{
 		.procname	= "conn_timeout",
@@ -202,7 +217,7 @@ static struct ctl_table fls_debug_table[] = {
 		.data		= &fls_def_sensor_xl_window,
 		.maxlen		= sizeof(fls_def_sensor_xl_window),
 		.mode		= 0644,
-		.proc_handler	= &proc_douintvec,
+		.proc_handler	= fls_debug_sample_timer_freq_handler,
 	},
 	{ }
 };
@@ -220,46 +235,51 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 	}
 
 	switch (packetinfo.cmd) {
-		case FLS_PFS_RESULT:
-			FLS_TRACE("\nFLS: Receive stop command.\n");
-			spin_lock(&fls_conn_lock);
-			conn = fls_conn_lookup(packetinfo.version, packetinfo.protocol,
-						packetinfo.src_ip,
-						packetinfo.src_port,
-						packetinfo.dst_ip,
-						packetinfo.dst_port);
-			if(conn) {
-				conn->stats.isd.sendevent = false;
-				if(conn->reverse)
-					conn->reverse->stats.isd.sendevent = false;
-				if (fls_def_sensor_max_events != -1 && fls_def_sensor_stop_forever)  {
-					FLS_TRACE("Lookup succeed! Stop XXL collection (FOREVER).");
-					conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-					if (conn->reverse) {
-						conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-					}
-					spin_unlock(&fls_conn_lock);
-					return count;
-				}
-				FLS_TRACE("Lookup succeed! Stop XXL collection (For this epoch).");
-			} else {
-				FLS_TRACE("Lookup failed!\n");
+	case FLS_PFS_RESULT:
+		FLS_TRACE("\nFLS: Receive stop command.\n");
+		conn = fls_conn_lookup(packetinfo.version, packetinfo.protocol,
+					packetinfo.src_ip,
+					packetinfo.src_port,
+					packetinfo.dst_ip,
+					packetinfo.dst_port);
+		if(conn) {
+			conn->stats.isd.sendevent = false;
+			conn->traffic_class = packetinfo.data.classid;
+
+			if(conn->reverse) {
+				conn->reverse->stats.isd.sendevent = false;
+				conn->reverse->traffic_class = packetinfo.data.classid;
 			}
+			if (fls_def_sensor_max_events != -1 && fls_def_sensor_stop_forever)  {
+				FLS_TRACE("Lookup succeed! Stop XXL collection (FOREVER).");
+				conn->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+				if (conn->reverse) {
+					conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+				}
+				break;
+			}
+			FLS_TRACE("Lookup succeed! Stop XXL collection (For this epoch).");
+			fls_debug_print_conn_info(conn);
+		} else {
+			FLS_TRACE("Lookup failed!\n");
+		}
 
-			spin_unlock(&fls_conn_lock);
-			return count;
+		break;
 
-		case FLS_PFS_EVENT:
-			FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
-			return 0;
+	case FLS_PFS_EVENT:
+		FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
+		break;
 
-		case FLS_PFS_FLUSH:
-			FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
-			return 0;
+	case FLS_PFS_FLUSH:
+		FLS_ERROR("FLSP + procfs is not supported %d.\n", packetinfo.cmd);
+		break;
 
-		default:
-			FLS_ERROR("Unrecognized command %d.\n", packetinfo.cmd);
-			return 0;
+	case FLS_PFS_CLEAN_EVENTS:
+		fls_rfs_clean_events();
+		break;
+
+	default:
+		FLS_ERROR("Unrecognized command %d.\n", packetinfo.cmd);
 	}
 
 	return count;
@@ -306,6 +326,11 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 	char ipaddr_str[16];
 	uint32_t i;
 
+	if (!conn) {
+		printk("fls_debug_print_conn_info: NULL connection pointer\n");
+		return;
+	}
+
 	if (fls_debug_level_current < FLS_DEBUG_LEVEL_INFO) {
 		return;
 	}
@@ -330,6 +355,7 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 			printk("%p orig_dst[%u] = %x", conn, i, conn->dest_ip[i]);
 		}
 	}
+	printk("%p: traffic_class=%u\n", conn, conn->traffic_class);
 
 	reply = conn->reverse;
 	if (!reply) {
@@ -351,6 +377,7 @@ void fls_debug_print_conn_info(struct fls_conn *conn)
 			printk("%p repl_dst[%u] = %x", reply, i, reply->dest_ip[i]);
 		}
 	}
+	printk("%p: traffic_class=%u\n", reply, reply->traffic_class);
 }
 #endif
 
@@ -360,6 +387,7 @@ void fls_debug_print(uint32_t level, char *fmt, ...) {
 	if (level <= fls_debug_level_current) {
 		va_start(args, fmt);
 		vprintk(fmt, args);
+		va_end(args);
 	}
 }
 
@@ -373,6 +401,10 @@ void fls_debug_deinit(void)
 	if (fls_debug_header) {
 		unregister_sysctl_table(fls_debug_header);
 	}
+
+#ifndef FLS_LITE_ENABLE
+	fls_stats_deinit();
+#endif
 }
 
 void fls_debug_init(void)
@@ -398,5 +430,7 @@ void fls_debug_init(void)
 	if (!fls_debug_header) {
 		FLS_ERROR("Failed to register fls sysctl table.\n");
 	}
+
+	fls_stats_init();
 #endif
 }
