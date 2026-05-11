@@ -120,6 +120,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 
 	if (!conn->reverse) {
 		FLS_WARN("%p cannot create event for unidirectional flow.", conn);
+		atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_EXCEPTION_CANNOT_CREATE_EVENT_UNIDIR_FLOW]);
 		return;
 	}
 
@@ -181,7 +182,13 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 
 		if (sendevent && !fls_rfs_enqueue(&event)) {
 			FLS_WARN("XXL Event dropped!\n");
+			atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XXL_FAIL]);
+			atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XXL_FAIL]);
+		} else if (sendevent) {
+			atomic_inc(&orig->fls_conn_counters[FLS_CONN_RFS_ENQUEUE_XXL]);
+			atomic_inc(&reverse->fls_conn_counters[FLS_CONN_RFS_ENQUEUE_XXL]);
 		}
+
 		// enable sendevent for XXL only.
 		orig->stats.isd.sendevent = true;
 		reverse->stats.isd.sendevent = true;
@@ -208,6 +215,11 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 
 		if (sendevent && !fls_rfs_enqueue(&event)) {
 			FLS_WARN("XL Event dropped!\n");
+			atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XL_FAIL]);
+			atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XL_FAIL]);
+		} else if (sendevent) {
+			atomic_inc(&orig->fls_conn_counters[FLS_CONN_RFS_ENQUEUE_XL]);
+			atomic_inc(&reverse->fls_conn_counters[FLS_CONN_RFS_ENQUEUE_XL]);
 		}
 
 		orig->stats.isd.sendevent = true;
@@ -234,6 +246,11 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 
 	if (!fls_rfs_enqueue(&event)) {
 		FLS_WARN("Event dropped!\n");
+		atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_DEF_FAIL]);
+		atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_DEF_FAIL]);
+	} else {
+		atomic_inc(&orig->fls_conn_counters[FLS_CONN_RFS_EVENT_TYPE_DEF]);
+		atomic_inc(&reverse->fls_conn_counters[FLS_CONN_RFS_EVENT_TYPE_DEF]);
 	}
 }
 
@@ -557,6 +574,8 @@ static enum hrtimer_restart fls_def_sensor_delay_timer_callback(struct hrtimer *
 	FLS_TRACE("trigger window %d post delay\n", FLS_DEF_SENSOR_WINDOW_MIN);
 	kt = ms_to_ktime(fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_MIN]);
 	hrtimer_start(&cmn->timers->window_timer->timer, kt, HRTIMER_MODE_REL);
+	atomic_inc(&cmn->orig->fls_conn_counters[FLS_CONN_PER_CONN_DELAY_FINISHED]);
+	atomic_inc(&cmn->reply->fls_conn_counters[FLS_CONN_PER_CONN_DELAY_FINISHED]);
 
 	return HRTIMER_NORESTART;
 }
@@ -587,6 +606,8 @@ static enum hrtimer_restart fls_def_sensor_window_timer_callback(struct hrtimer 
 		window_index = FLS_DEF_SENSOR_WINDOW_LG;
 	} else {
 		FLS_ERROR("Invalid flags fed to window_timer_callback\n");
+		atomic_inc(&data->cmn->orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_INVALID_FLAGS_WINDOW_TIMER_CALLBACK]);
+		atomic_inc(&data->cmn->reply->fls_conn_exception_counters[FLS_CONN_EXCEPTION_INVALID_FLAGS_WINDOW_TIMER_CALLBACK]);
 		return HRTIMER_NORESTART;
 	}
 
@@ -626,6 +647,8 @@ static enum hrtimer_restart fls_def_sensor_window_timer_callback(struct hrtimer 
 			FLS_WARN("%p HWM exceeded. orig_pkts=%u reply_pkts= %u pkt_hwm=%u, orig_bytes=%u reply_bytes=%u bytes_hwm=%u", cmn->orig, cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].packets,
 					cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].packets,fls_def_sensor_pkts_hwm, cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes,
 					cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes, fls_def_sensor_bytes_hwm);
+			atomic_inc(&cmn->orig->fls_conn_exception_counters[FLS_CONN_SENSOR_HWM_EXCEEDED]);
+			atomic_inc(&cmn->reply->fls_conn_exception_counters[FLS_CONN_SENSOR_HWM_EXCEEDED]);
 			cmn->orig->flags = SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
 			cmn->reply->flags = SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
 			return HRTIMER_NORESTART;
@@ -657,6 +680,8 @@ static enum hrtimer_restart fls_def_sensor_window_timer_callback(struct hrtimer 
 			 */
 			if ((fls_def_sensor_max_events >= 0) && (cmn->orig->stats.isd.events >= fls_def_sensor_max_events)) {
 				FLS_TRACE("Exceeded max event count, disabling connection %p\n", cmn->orig->flags);
+				atomic_inc(&cmn->orig->fls_conn_exception_counters[FLS_CONN_SENSOR_MAX_EVENT_EXCEEDED]);
+				atomic_inc(&cmn->reply->fls_conn_exception_counters[FLS_CONN_SENSOR_MAX_EVENT_EXCEEDED]);
 				cmn->orig->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 				cmn->reply->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 				return HRTIMER_NORESTART;
@@ -709,6 +734,7 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 	cmn = data->cmn;
 
 	if (!(cmn->orig->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE) || !(cmn->reply->flags & SFE_FLS_CONNECTION_FLAG_DEF_ENABLE)) {
+		FLS_INFO("%p: Defer XL or XXL event create due to stats collection disabled\n", cmn->orig);
 		return HRTIMER_NORESTART;
 	}
 
@@ -787,9 +813,24 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 
 void fls_def_sensor_timer_delete(struct fls_conn *conn)
 {
-	hrtimer_cancel(&conn->cmn->timers->delay_timer->timer);
-	hrtimer_cancel(&conn->cmn->timers->window_timer->timer);
-	hrtimer_cancel(&conn->cmn->timers->xl_xxl_timer->timer);
+	if (!conn->cmn) {
+		return;
+	}
+
+	if (conn->cmn->timers->delay_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->delay_timer->timer);
+		conn->cmn->timers->delay_timer->timer.function = NULL;
+	}
+
+	if (conn->cmn->timers->window_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->window_timer->timer);
+		conn->cmn->timers->window_timer->timer.function = NULL;
+	}
+	if (conn->cmn->timers->xl_xxl_timer->timer.function) {
+		hrtimer_cancel(&conn->cmn->timers->xl_xxl_timer->timer);
+		conn->cmn->timers->xl_xxl_timer->timer.function = NULL;
+	}
+	atomic_inc(&conn->fls_conn_counters[FLS_CONN_TIMER_DELETE]);
 }
 
 uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb)
@@ -806,6 +847,7 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 
 	if (fls_def_sensor_max_events == 0 || sample_length == 0) {
 		FLS_TRACE("%p Default sensor disabled.\n", conn);
+		atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_EXCEPTION_DEFAULT_SENSOR_DISABLED]);
 		return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
 	}
 
@@ -816,6 +858,7 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		 * Kill any active timers
 		 */
 		fls_def_sensor_timer_delete(conn);
+		atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_SENSOR_HWM_EXCEEDED]);
 
 		return SFE_FLS_CONNECTION_FLAG_HWM_EXCEEDED;
 	}
@@ -827,6 +870,7 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 		 * Kill any active timers
 		 */
 		fls_def_sensor_timer_delete(conn);
+		atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_EXCEPTION_DEFAULT_SENSOR_DISABLED]);
 
 		return SFE_FLS_CONNECTION_FLAG_DEF_DISABLE;
 	}
