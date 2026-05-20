@@ -9,6 +9,13 @@
 struct fls_conn_tracker fct;
 s64 fls_conn_timeout = 200;
 
+static struct kmem_cache *fls_conn_cache;
+
+/*
+ * fls_conn_get_connection_hash()
+ *	Computes a hash for the connection based on IP version,
+ *	protocol, IP addresses, and ports.
+ */
 static inline uint32_t fls_conn_get_connection_hash(uint8_t ip_version, uint8_t protocol, uint32_t *src_ip, uint16_t src_port, uint32_t *dest_ip, uint16_t dest_port)
 {
 	uint32_t hash = 0;
@@ -26,6 +33,11 @@ static inline uint32_t fls_conn_get_connection_hash(uint8_t ip_version, uint8_t 
 	return ((hash >> FLS_CONN_HASH_SHIFT) ^ hash) & FLS_CONN_HASH_MASK;
 }
 
+/*
+ * fls_conn_matches()
+ *	Checks if a connection matches the given 5-tuple (IPv4/IPv6,
+ *	protocol, src/dest IPs, and ports).
+ */
 static inline bool fls_conn_matches(struct fls_conn *connection,
 								uint8_t ip_version,
 								uint8_t protocol,
@@ -64,6 +76,12 @@ static inline bool fls_conn_matches(struct fls_conn *connection,
 	return true;
 }
 
+/*
+ * fls_conn_create_flow()
+ *	Allocates and initializes a connection, links it into global
+ *	lists and hash bucket under lock, and returns the entry.
+ *	TODO: There is a possibility that 2 flows with same 5-tuple can be created. Need more debug on this.
+ */
 struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 								uint8_t protocol,
 								uint32_t *src_ip,
@@ -73,15 +91,36 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 {
 	struct fls_conn *connection;
 	uint32_t hash;
-	connection = fct.free_list;
+	atomic_inc(&fct.fls_gbl_counters[FLS_GBL_CREATE_REQUESTS]);
+
+	hash = fls_conn_get_connection_hash(ip_version, protocol, src_ip, src_port, dest_ip, dest_port);
+
+	/*
+	 * Allocate connection outside lock
+	 */
+	connection = kmem_cache_zalloc(fls_conn_cache, GFP_ATOMIC);
 	if (!connection) {
-		FLS_ERROR("Connection max reached.\n");
+		FLS_ERROR("Failed to allocate FLS connection (out of memory).\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
 		return NULL;
 	}
-	fct.free_list = connection->all_next;
-	if(fct.free_list)
-		fct.free_list->all_prev = NULL;
 
+	spin_lock_bh(&fct.lock);
+
+	/*
+	 * Check capacity under lock
+	 */
+	if (unlikely(fct.num_connections >= fct.max_connections)) {
+		spin_unlock_bh(&fct.lock);
+		kmem_cache_free(fls_conn_cache, connection);
+		FLS_ERROR("FLS connection limit (%u) reached (allocation denied).\n", fct.max_connections);
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MAX_CONN_LIMIT]);
+		return NULL;
+	}
+
+	/*
+	 * Initialize connection fields
+	 */
 	if (ip_version == 6) {
 		connection->src_ip[0] = src_ip[0];
 		connection->src_ip[1] = src_ip[1];
@@ -107,15 +146,11 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 	connection->protocol = protocol;
 	connection->src_port = src_port;
 	connection->dest_port = dest_port;
-
-	memset(&connection->stats, 0, sizeof(connection->stats));
-
-	hash = fls_conn_get_connection_hash(ip_version, protocol, src_ip, src_port, dest_ip, dest_port);
 	connection->hash = hash;
 	connection->flags = SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+	connection->traffic_class = 0xFF;
 
 	connection->all_next = fct.all_connections_head;
-
 	if (fct.all_connections_head) {
 		fct.all_connections_head->all_prev = connection;
 	}
@@ -126,16 +161,32 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 		fct.all_connections_tail = connection;
 	}
 
+	/*
+	 * Insert into hash bucket
+	 */
 	connection->hash_next = fct.hash[hash];
 	if (fct.hash[hash]) {
 		fct.hash[hash]->hash_prev = connection;
 	}
-
 	fct.hash[hash] = connection;
+
+	/*
+	 * Count increment happens after successful link
+	 */
+	fct.num_connections++;
+	FLS_WARN("Created fls_conn: %p ip_version=%u, protocol=%u, src_ip=%pI4, src_port=%u, dest_ip=%pI4, dest_port=%u, current connections: %u\n",
+			connection, ip_version, protocol, src_ip, ntohs(src_port), dest_ip, ntohs(dest_port), fct.num_connections);
+	spin_unlock_bh(&fct.lock);
+	atomic_inc(&fct.fls_gbl_counters[FLS_GBL_ACTIVE_COUNT]);
 
 	return connection;
 }
 
+/*
+ * fls_conn_stats_update()
+ *	Updates connection stats using sensor manager callbacks
+ *	and returns current connection flags.
+ */
 uint8_t fls_conn_stats_update(void *connection, struct sk_buff *skb)
 {
 	struct fls_conn *conn = (struct fls_conn *)connection;
@@ -145,6 +196,11 @@ uint8_t fls_conn_stats_update(void *connection, struct sk_buff *skb)
 }
 EXPORT_SYMBOL(fls_conn_stats_update);
 
+/*
+ * fls_conn_lookup()
+ *	Finds a connection in the hash table by 5-tuple; promotes it to
+ *	the bucket head on hit (move-to-front) and returns the entry.
+ */
 struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 								uint8_t protocol,
 								uint32_t *src_ip,
@@ -156,16 +212,17 @@ struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 	struct fls_conn *connection;
 	struct fls_conn *hash_head;
 
-	spin_lock_bh(&(fct.lock));
+	spin_lock_bh(&fct.lock);
 	connection = fct.hash[hash];
 	hash_head = connection;
 
 	while (connection) {
 		if (fls_conn_matches(connection, ip_version, protocol, src_ip, src_port, dest_ip, dest_port)) {
 			if(connection == hash_head) {
-				spin_unlock_bh(&(fct.lock));
+				spin_unlock_bh(&fct.lock);
 				return connection;
 			}
+
 			connection->hash_prev->hash_next = connection->hash_next;
 			if(connection->hash_next)
 				connection->hash_next->hash_prev = connection->hash_prev;
@@ -173,57 +230,93 @@ struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 			connection->hash_next = hash_head;
 			hash_head->hash_prev = connection;
 			fct.hash[hash] = connection;
-			spin_unlock_bh(&(fct.lock));
+			spin_unlock_bh(&fct.lock);
 			return connection;
 		}
 		connection = connection->hash_next;
 	}
 
-	spin_unlock_bh(&(fct.lock));
+	spin_unlock_bh(&fct.lock);
 	return NULL;
 }
 EXPORT_SYMBOL(fls_conn_lookup);
 
-static void fls_conn_free_cmn(struct fls_conn *conn)
+/*
+ * fls_conn_free_cmn()
+ *	Free all dynamically allocated resources in fls_conn_cmn :
+ *	release timers, clear back-references, and free the common struct.
+ */
+static void fls_conn_free_cmn(struct fls_conn_cmn *cmn)
 {
+	if (!cmn) {
+		return;
+	}
+
 	/*
-	 * Kill any active timers
+	 * Ensure timers are deleted before freeing memory
 	 */
-	fls_def_sensor_timer_delete(conn);
+	if (cmn->timers) {
+		if (cmn->timers->delay_timer && cmn->timers->delay_timer->timer.function) {
+			hrtimer_cancel(&cmn->timers->delay_timer->timer);
+			kfree(cmn->timers->delay_timer);
+		}
 
-	if (conn->cmn->timers->delay_timer)
-		kfree(conn->cmn->timers->delay_timer);
+		if (cmn->timers->window_timer && cmn->timers->window_timer->timer.function) {
+			hrtimer_cancel(&cmn->timers->window_timer->timer);
+			kfree(cmn->timers->window_timer);
+		}
 
-	if (conn->cmn->timers->window_timer)
-		kfree(conn->cmn->timers->window_timer);
+		if (cmn->timers->xl_xxl_timer && cmn->timers->xl_xxl_timer->timer.function) {
+			hrtimer_cancel(&cmn->timers->xl_xxl_timer->timer);
+			kfree(cmn->timers->xl_xxl_timer);
+		}
 
-	if (conn->cmn->timers->xl_xxl_timer)
-		kfree(conn->cmn->timers->xl_xxl_timer);
+		kfree(cmn->timers);
+	}
 
-	if (conn->cmn->timers)
-		kfree(conn->cmn->timers);
+	if(cmn->orig) {
+		cmn->orig->cmn = NULL;
+	}
 
-	if (conn->cmn)
-		kfree(conn->cmn);
+	if(cmn->reply) {
+		cmn->reply->cmn = NULL;
+	}
 
-	conn->cmn = NULL;
-	conn->reverse->cmn = NULL;
-
+	kfree(cmn);
 }
 
-void fls_conn_delete_internal(void *conn)
+/*
+ * fls_conn_delete_internal()
+ *	Removes a connection from lists and hash table, updates counters,
+ *	and frees memory. Also clears reverse link and common resources.
+ */
+static void fls_conn_delete_internal(void *conn)
 {
 	struct fls_conn *connection = (struct fls_conn *)conn;
-	struct fls_conn *reply = connection->reverse;
+	struct fls_conn *reply;
+
+	if (!connection) {
+		FLS_WARN("fls_conn_delete_internal called with null connections");
+		return;
+	}
+
+	reply = connection->reverse;
+
+	FLS_TRACE("Deleting fls_conn: \n");
+	fls_debug_print_conn_info(conn);
 
 	if (connection->cmn) {
-		fls_conn_free_cmn(connection);
+		fls_def_sensor_timer_delete(connection);
+		fls_conn_free_cmn(connection->cmn);
 	}
 
 	if (reply) {
 		reply->reverse = NULL;
 	}
 
+	/*
+	 * Unlink from all_connections list
+	 */
 	if (connection->all_prev) {
 		connection->all_prev->all_next = connection->all_next;
 	} else {
@@ -236,6 +329,9 @@ void fls_conn_delete_internal(void *conn)
 		fct.all_connections_tail = connection->all_prev;
 	}
 
+	/*
+	 * Unlink from hash bucket
+	 */
 	if (connection->hash_prev) {
 		connection->hash_prev->hash_next = connection->hash_next;
 	} else {
@@ -246,32 +342,37 @@ void fls_conn_delete_internal(void *conn)
 		connection->hash_next->hash_prev = connection->hash_prev;
 	}
 
-	connection->all_next = fct.free_list;
-	if (fct.free_list) {
-		fct.free_list->all_prev = connection;
-	}
-	connection->all_prev = NULL;
-	connection->hash_next = NULL;
-	connection->hash_prev = NULL;
-	connection->externalrule = false;
-	memset(&connection->stats, 0, sizeof(connection->stats));
-	fct.free_list = connection;
+	fct.num_connections--;
+	FLS_WARN("Deleting fls_conn: %p ip_version=%u, protocol=%u, src_ip=%pI4, src_port=%u, dest_ip=%pI4, dest_port=%u, current connections: %u\n",
+			connection, connection->ip_version, connection->protocol, connection->src_ip, ntohs(connection->src_port), connection->dest_ip, ntohs(connection->dest_port), fct.num_connections);
+	atomic_dec(&fct.fls_gbl_counters[FLS_GBL_ACTIVE_COUNT]);
+
+	/*
+	 * Free after list/hash removal
+	 */
+	kmem_cache_free(fls_conn_cache, connection);
 }
 
+/*
+ * fls_conn_flush()
+ *	Flushes all existing connections from the FLS connection tracker
+ *	by iterating through the connection list and deleting each entry.
+ *	Ensures proper cleanup while holding the tracker lock.
+ */
 void fls_conn_flush(void) {
 	struct fls_conn *conn;
-	int i;
-	FLS_TRACE("flush external connection\n");
-	spin_lock_bh(&(fct.lock));
-	for (i = 0; i < FLS_CONN_MAX; i++) {
-		conn = &(fct.connections[i]);
-		if(!conn->externalrule)
-			continue;
-		FLS_INFO("FID: Deleting connection.");
-		fls_debug_print_conn_info(conn);
+	struct fls_conn *next;
+
+	FLS_TRACE("flush all connections\n");
+	spin_lock_bh(&fct.lock);
+	conn = fct.all_connections_head;
+	while(conn) {
+		next = conn->all_next;
+		FLS_TRACE("FID: Deleting connections (FLUSH).");
 		fls_conn_delete_internal(conn);
+		conn = next;
 	}
-	spin_unlock_bh(&(fct.lock));
+	spin_unlock_bh(&fct.lock);
 }
 
 /*
@@ -280,17 +381,21 @@ void fls_conn_flush(void) {
  */
 void fls_conn_delete(void *conn)
 {
-	FLS_INFO("FID: Deleting connection.");
-	spin_lock_bh(&(fct.lock));
-	fls_debug_print_conn_info(conn);
+	FLS_INFO("FID: Deleting connection (CONN_DELETE).");
+	atomic_inc(&fct.fls_gbl_counters[FLS_GBL_DELETE_REQUESTS]);
+	spin_lock_bh(&fct.lock);
 	fls_conn_delete_internal(conn);
-	spin_unlock_bh(&(fct.lock));
+	spin_unlock_bh(&fct.lock);
 }
 EXPORT_SYMBOL(fls_conn_delete);
 
 /*
  * fls_conn_delete_timeout()
  *	Delete all timeout connection.
+ *	TODO : 1. This function gets called only when flsp is running.
+ *			Return true if atleast one connection is deleted.
+ *			2. Connection lookup should happen within spin_lock .
+ *			3. Add error check for all_connections_head being NULL.
  */
 bool fls_conn_delete_timeout(ktime_t now, s64 threshold) {
 	struct fls_conn *cur = fct.all_connections_head;
@@ -335,39 +440,56 @@ struct fls_conn_cmn *fls_conn_alloc_cmn(void)
 	cmn = kmalloc(sizeof(struct fls_conn_cmn), GFP_ATOMIC);
 	if (!cmn) {
 		FLS_WARN("failed to alloc common stats\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
 		return NULL;
 	}
 
 	cmn->timers = kmalloc(sizeof(struct fls_def_sensor_timers), GFP_ATOMIC);
 	if (!cmn->timers) {
 		FLS_WARN("failed to alloc timers struct\n");
-		return NULL;
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
+		goto cmn_free;
 	}
 
 	cmn->timers->delay_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
 	if (!cmn->timers->delay_timer) {
 		FLS_WARN("failed to alloc delay timer struct\n");
-		return NULL;
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
+		goto timers_free;
 	}
 	cmn->timers->delay_timer->cmn = cmn;
+	cmn->timers->delay_timer->timer.function = NULL;
 
 	cmn->timers->window_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
 	if (!cmn->timers->window_timer) {
 		FLS_WARN("failed to alloc window timer struct\n");
-		return NULL;
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
+		goto delay_timer_free;
 	}
 	cmn->timers->window_timer->cmn = cmn;
+	cmn->timers->window_timer->timer.function = NULL;
 
 	cmn->timers->xl_xxl_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
 	if (!cmn->timers->xl_xxl_timer) {
 		FLS_WARN("failed to alloc xl timer struct\n");
-		return NULL;
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
+		goto window_timer_free;
 	}
 	cmn->timers->xl_xxl_timer->cmn = cmn;
+	cmn->timers->xl_xxl_timer->timer.function = NULL;
 
 	return cmn;
-}
 
+window_timer_free:
+	kfree(cmn->timers->window_timer);
+delay_timer_free:
+	kfree(cmn->timers->delay_timer);
+timers_free:
+	kfree(cmn->timers);
+cmn_free:
+	kfree(cmn);
+	return NULL;
+}
 
 /*
  * fls_conn_create_bidiflow()
@@ -384,6 +506,9 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 	struct fls_conn *reply;
 	struct fls_conn_cmn *cmn;
 
+	FLS_INFO("Creating fls_conn bidirectional flow: ip_version=%u, protocol=%u, orig_src_ip=%pI4, orig_src_port=%u, orig_dest_ip=%pI4, orig_dest_port=%u\n",
+			ip_version, protocol, orig_src_ip, ntohs(orig_src_port), orig_dest_ip, ntohs(orig_dest_port));
+
 	cmn = fls_conn_alloc_cmn();
 	if (!cmn) {
 		return NULL;
@@ -391,15 +516,19 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 
 	orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
 	if (!orig && !isexternal) {
-		kfree(cmn);
+		fls_conn_free_cmn(cmn);
 		return NULL;
 	}
 
-	if(!orig) {
-		if(fls_conn_delete_timeout(last_ts, fls_conn_timeout)){
+	if (!orig) {
+		if (fls_conn_delete_timeout(last_ts, fls_conn_timeout)) {
 			orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
+			if (!orig) {
+				fls_conn_free_cmn(cmn);
+				return NULL;
+			}
 		} else {
-			kfree(cmn);
+			fls_conn_free_cmn(cmn);
 			return NULL;
 		}
 	}
@@ -408,24 +537,38 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 
 	reply = fls_conn_create_flow(ip_version, protocol, orig_dest_ip, orig_dest_port, orig_src_ip, orig_src_port);
 	if (!reply && !isexternal) {
+		spin_lock_bh(&fct.lock);
 		fls_conn_delete_internal(orig);
+		fls_conn_free_cmn(cmn);
+		spin_unlock_bh(&fct.lock);
 		return NULL;
 	}
 
-	if(!reply) {
-		if(fls_conn_delete_timeout(last_ts, fls_conn_timeout)) {
+	if (!reply) {
+		if (fls_conn_delete_timeout(last_ts, fls_conn_timeout)) {
 			reply = fls_conn_create_flow(ip_version, protocol, orig_dest_ip, orig_dest_port, orig_src_ip, orig_src_port);
+			if (!reply) {
+				FLS_ERROR("FLS create reply flow failed, now free common stats");
+				spin_lock_bh(&fct.lock);
+				fls_conn_delete_internal(orig);
+				fls_conn_free_cmn(cmn);
+				spin_unlock_bh(&fct.lock);
+				return NULL;
+			}
 		} else {
+			FLS_ERROR("FLS create reply flow failed, now free common stats");
+			spin_lock_bh(&fct.lock);
 			fls_conn_delete_internal(orig);
+			fls_conn_free_cmn(cmn);
+			spin_unlock_bh(&fct.lock);
 			return NULL;
 		}
 	}
 
 	reply->last_ts = last_ts;
 
-	if(isexternal)
+	if (isexternal)
 		FLS_INFO("FID: creating fls %sconnection.", isexternal?"external ":"");
-	fls_debug_print_conn_info(orig);
 
 	orig->externalrule = isexternal;
 	reply->externalrule = isexternal;
@@ -462,7 +605,6 @@ void fls_conn_create(uint8_t ip_version,
 						void **repl_conn) {
 	struct fls_conn *orig;
 
-	spin_lock_bh(&(fct.lock));
 	orig = fls_conn_create_bidiflow(ip_version,
 						protocol,
 						orig_src_ip,
@@ -470,7 +612,6 @@ void fls_conn_create(uint8_t ip_version,
 						orig_dest_ip,
 						orig_dest_port,
 						false, 0);
-	spin_unlock_bh(&(fct.lock));
 
 	if(orig) {
 		*orig_conn = orig;
@@ -484,23 +625,64 @@ void fls_conn_create(uint8_t ip_version,
 }
 EXPORT_SYMBOL(fls_conn_create);
 
-void fls_conn_tracker_init(void)
+/*
+ * fls_conn_tracker_init()
+ *	Initializes the FLS connection tracker by setting up internal
+ *	data structures, locks, and memory caches required for managing
+ *	connections.
+ */
+int fls_conn_tracker_init(void)
 {
-	uint32_t i;
-	struct fls_conn *conn;
 	memset(&fct, 0, sizeof(fct));
 	spin_lock_init(&fct.lock);
 	fls_sensor_manager_init(&fct.fsm);
-	for (i = 0; i < FLS_CONN_MAX; i++) {
-		conn = &(fct.connections[i]);
 
-		/*
-		 * The free list is maintained as a singly-linked list because there's no need
-		 * to traverse it backward.
-		 */
-		if(fct.free_list)
-			fct.free_list->all_prev = conn;
-		conn->all_next = fct.free_list;
-		fct.free_list = conn;
+	/*
+	 * Create slab cache for fls_conn objects
+	 */
+	fls_conn_cache = kmem_cache_create("fls_conn_cache",
+			sizeof(struct fls_conn), 0,
+			0, NULL);
+	if (!fls_conn_cache) {
+		FLS_ERROR("Failed to create FLS connection slab cache\n");
+		return -ENOMEM;
+	}
+
+	/*
+	 * Dynamically allocate hash table
+	 */
+	fct.hash = kvzalloc(sizeof(struct fls_conn *) * FLS_CONN_HASH_SIZE, GFP_KERNEL);
+	if (!fct.hash) {
+		FLS_ERROR("Failed to allocate FLS connection hash table\n");
+		kmem_cache_destroy(fls_conn_cache);
+		fls_conn_cache = NULL;
+		return -ENOMEM;
+	}
+
+	/*
+	 * Max connections is now a static limit
+	 */
+	fct.max_connections = FLS_CONN_MAX;
+	fct.num_connections = 0;
+	return 0;
+}
+
+/*
+ * fls_conn_tracker_exit()
+ *	Cleans up resources allocated by the FLS connection tracker,
+ *	including hash tables and slab caches, during module shutdown.
+ */
+void fls_conn_tracker_exit(void)
+{
+	FLS_TRACE("fls_conn_tracker_exit\n");
+
+	if (fct.hash) {
+		kvfree(fct.hash);
+		fct.hash = NULL;
+	}
+
+	if (fls_conn_cache) {
+		kmem_cache_destroy(fls_conn_cache);
+		fls_conn_cache = NULL;
 	}
 }

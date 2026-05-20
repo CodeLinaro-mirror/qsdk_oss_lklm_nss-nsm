@@ -21,6 +21,7 @@ def define_modules(target, variant):
             "fls_debug.c",
             "fls_chardev.c",
             "fls_rfs.c",
+            "fls_stats.c",
         ],
         kernel_build = "//msm-kernel:{}-defconfig".format(kernel_build_variant),
         includes = [
