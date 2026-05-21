@@ -914,7 +914,7 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
 
 		ret = fls_def_traverse_gro_skb(skb, &gro_stats);
 		if (ret) {
-			FLS_ERROR("%p: Failed to traverse GRO skb, continue with head skb\n", skb);
+			FLS_WARN("%p: Failed to traverse GRO skb, continue with head skb\n", skb);
 		}
 
 		FLS_TRACE("Minimum fragment size: %u\n", gro_stats.min_bytes);
