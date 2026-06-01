@@ -11,7 +11,7 @@
 #include <linux/spinlock.h>
 #include "fls_sensor_manager.h"
 
-#define FLS_DEF_SENSOR_MAX_SAMPLE_COUNT 10
+#define FLS_DEF_SENSOR_MAX_SAMPLE_COUNT 5
 #define FLS_DEF_SENSOR_WINDOWS 3
 #define FLS_DEF_SENSOR_WINDOW_LG (FLS_DEF_SENSOR_WINDOWS - 1)
 #define FLS_DEF_SENSOR_TOTAL_TIME (fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_LG] * fls_def_sensor_sample_count)

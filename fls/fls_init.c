@@ -1,19 +1,6 @@
 /*
- **************************************************************************
- * Copyright (c) 2023, 2025, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include "fls_flow.h"
@@ -55,7 +42,10 @@ static int fls_init_default(void)
 		return err;
 	}
 
-	fls_conn_tracker_init();
+	err = fls_conn_tracker_init();
+	if (err) {
+		return err;
+	}
 
 	if (!fls_def_sensor_init(&fct.fsm)) {
 		FLS_ERROR("Failed to register def sensor.\n");
@@ -82,10 +72,26 @@ void __exit fls_exit(void)
 	fls_flow_deinit();
 	fls_debug_deinit();
 
+	FLS_TRACE("udp_clf_enabled = %d\n", udp_clf_enabled);
 	if (!udp_clf_enabled) {
 #ifndef FLS_LITE_ENABLE
+		FLS_TRACE("sfe_fls_unregister\n");
 		sfe_fls_unregister();
+
+		/*
+		 * Perform existing connections force flush during module exit.
+		 */
+		fls_conn_flush();
+
+		/*
+		 * Shutdown rfs channel once all connections are flushed.
+		 */
 		fls_rfs_shutdown();
+
+		/*
+		 * Perform the cleanup for fls_conn
+		 */
+		fls_conn_tracker_exit();
 #endif
 	}
 }

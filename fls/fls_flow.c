@@ -1,19 +1,6 @@
 /*
- **************************************************************************
- * Copyright (c) 2024-2025, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- **************************************************************************
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include <linux/types.h>
@@ -34,6 +21,7 @@
 #include "fls_chardev.h"
 #include "fls_debug.h"
 
+atomic_t fls_flow_work_active = ATOMIC_INIT(0);
 struct delayed_work fls_flow_work;
 struct workqueue_struct *fls_flow_workqueue;
 unsigned int bucket;
@@ -97,22 +85,22 @@ int fls_flow_get_macaddr_ipv4(uint32_t ip_addr, uint8_t *mac_addr)
 	 */
 	neigh = fls_flow_get_neigh_ipv4(ip_addr);
 	if (!neigh) {
-		FLS_INFO("neighbour lookup failed for IP:0x%x\n", ip_addr);
+		FLS_TRACE("neighbour lookup failed for IP:0x%x\n", ip_addr);
 		return -ENODEV;
 	}
 
 	if ((neigh->nud_state & NUD_VALID) == 0) {
-		FLS_INFO("neighbour state is invalid for IP:0x%x\n", ip_addr);
+		FLS_TRACE("neighbour state is invalid for IP:0x%x\n", ip_addr);
 		goto fail;
 	}
 
 	if (!neigh->dev) {
-		FLS_INFO("neighbour device not found for IP:0x%x\n", ip_addr);
+		FLS_TRACE("neighbour device not found for IP:0x%x\n", ip_addr);
 		goto fail;
 	}
 
 	if (is_multicast_ether_addr(neigh->ha)) {
-		FLS_INFO( "neighbour MAC address is multicast or broadcast\n");
+		FLS_TRACE( "neighbour MAC address is multicast or broadcast\n");
 		goto fail;
 	}
 
@@ -182,22 +170,22 @@ static int fls_flow_get_macaddr_ipv6(uint32_t ip_addr[4], uint8_t mac_addr[])
 	 */
 	neigh = fls_flow_get_neigh_ipv6(ip_addr);
 	if (!neigh) {
-		FLS_INFO("neighbour lookup failed for %pI6c\n", ip_addr);
+		FLS_TRACE("neighbour lookup failed for %pI6c\n", ip_addr);
 		return -ENODEV;
 	}
 
 	if ((neigh->nud_state & NUD_VALID) == 0) {
-		FLS_INFO("neighbour state is invalid for %pI6c\n", ip_addr);
+		FLS_TRACE("neighbour state is invalid for %pI6c\n", ip_addr);
 		goto fail;
 	}
 
 	if (!neigh->dev) {
-		FLS_INFO("neighbour device not found for %pI6c\n", ip_addr);
+		FLS_TRACE("neighbour device not found for %pI6c\n", ip_addr);
 		goto fail;
 	}
 
 	if (is_multicast_ether_addr(neigh->ha)) {
-		FLS_INFO("neighbour MAC address is multicast or broadcast\n");
+		FLS_TRACE("neighbour MAC address is multicast or broadcast\n");
 		goto fail;
 	}
 
@@ -262,6 +250,11 @@ int fls_flow_fill_udp_clf_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tu
 {
 	int ret = 1;
 
+	if (!ct || !tuple || !l4proto) {
+		FLS_WARN("Invalid parameters passed to fls_flow_fill_udp_clf_flow");
+		return 0;
+	}
+
 	switch (tuple->src.l3num) {
 	case NFPROTO_IPV4:
 		udp_clf_flow->src_ip_addr[0] = tuple->src.u3.ip;
@@ -279,6 +272,9 @@ int fls_flow_fill_udp_clf_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tu
 	}
 
 #ifdef FLS_ECM_CLASSIFIER_EMESH_ENABLE
+	if (!nf_ct_is_confirmed(ct) || nf_ct_is_dying(ct)) {
+		return 0;
+	}
 	ret = ecm_classifier_emesh_sawf_get_connection_info(ct, &udp_clf_flow->org_dscp, &udp_clf_flow->ret_dscp,
 			&udp_clf_flow->is_src_wiphy, &udp_clf_flow->is_dst_wiphy);
 #endif
@@ -389,6 +385,11 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 
 	FLS_TRACE("FLS_FLOW Workqueue Called\n");
 
+	if (atomic_read(&fls_flow_work_active) == 0) {
+		FLS_WARN("FLS Flow work is inactive.\n");
+		return;
+	}
+
 	/*
 	 * Iterate through nf_conntrack entries
 	 */
@@ -407,6 +408,14 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 				continue;
 			}
 
+			/*
+			 * Skip dying connections
+			 */
+			if (nf_ct_is_dying(ct)) {
+				FLS_TRACE("Connection: %p is dying, skipping", ct);
+				continue;
+			}
+
 			if (NF_CT_DIRECTION(h)) {
 				continue;
 			}
@@ -419,14 +428,24 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 				continue;
 			}
 
+			/*
+			 * Take a reference on the conntrack entry to prevent it from being freed
+			 */
+			if (!refcount_inc_not_zero(&ct->ct_general.use)) {
+				FLS_WARN("Failed to get reference for connection: %p", ct);
+				continue;
+			}
+
 			if (!udp_clf_enabled) {
 				if (l4proto->l4proto != IPPROTO_TCP && l4proto->l4proto != IPPROTO_UDP) {
 					FLS_TRACE("Connection: %p isn't TCP or UDP", ct);
+					nf_ct_put(ct);
 					continue;
 				}
 			} else {
 				if (l4proto->l4proto != IPPROTO_UDP) {
 					FLS_TRACE("Connection: %p isn't UDP", ct);
+					nf_ct_put(ct);
 					continue;
 				}
 			}
@@ -434,6 +453,7 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 			ct_acct = nf_conn_acct_find(ct);
 			if (unlikely(!ct_acct)) {
 				FLS_WARN("Unable to get stats for connection:%p \n", ct);
+				nf_ct_put(ct);
 				continue;
 			}
 
@@ -442,18 +462,24 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 
 				if (!fls_chardev_enqueue(&tm_flow)) {
 					FLS_INFO("FTM_MSG Dropped");
+					nf_ct_put(ct);
+					continue;
 				}
 			} else {
 				if (!fls_flow_fill_udp_clf_flow(ct, tuple, l4proto, ct_acct, &udp_clf_flow)) {
 					FLS_WARN("Unable to get connection info:%p \n", ct);
+					nf_ct_put(ct);
 					continue;
 				}
 
 				if (!fls_chardev_enqueue(&udp_clf_flow)) {
 					FLS_INFO("FLS UDP_CLF MSG Dropped");
+					nf_ct_put(ct);
+					continue;
 				}
 			}
 
+			nf_ct_put(ct);
 		}
 		spin_unlock_bh(lockp);
 	}
@@ -475,7 +501,11 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 		}
 	}
 
-	queue_delayed_work(fls_flow_workqueue, &fls_flow_work, FLS_FLOW_STATS_PUSH_PERIOD);
+	if (atomic_read(&fls_flow_work_active) == 1) {
+		queue_delayed_work(fls_flow_workqueue, &fls_flow_work, FLS_FLOW_STATS_PUSH_PERIOD);
+	} else {
+		FLS_WARN("FLS flow work inactive. Push stats work not enqueued.\n");
+	}
 }
 
 /*
@@ -496,6 +526,7 @@ bool fls_flow_init(void)
 		return false;
 	}
 	INIT_DELAYED_WORK(&fls_flow_work, fls_flow_push_stats_req_work);
+	atomic_set(&fls_flow_work_active, 1);
 	queue_delayed_work(fls_flow_workqueue, &fls_flow_work, FLS_FLOW_STATS_PUSH_PERIOD);
 	FLS_TRACE("FLS CMN Init Success\n");
 
@@ -511,6 +542,8 @@ void fls_flow_deinit(void)
 	/*
 	 * Cancel the push stats req work and destroy workqueues
 	 */
+	atomic_set(&fls_flow_work_active, 0);
 	cancel_delayed_work_sync(&fls_flow_work);
+	flush_workqueue(fls_flow_workqueue);
 	destroy_workqueue(fls_flow_workqueue);
 }
