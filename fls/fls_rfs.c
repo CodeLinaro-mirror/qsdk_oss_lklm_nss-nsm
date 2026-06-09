@@ -6,7 +6,7 @@
 /*
  * Default values for RFS module parameters
  */
-#define FLS_RFS_EVENT_MAX_DEFAULT 128
+#define FLS_RFS_EVENT_MAX_DEFAULT 256
 #define FLS_RFS_EVENT_MASK(max) ((max) - 1)
 
 #include <linux/module.h>
@@ -310,6 +310,7 @@ int fls_rfs_init(void)
 	if (!event_log.event_ring_buf)
 		return -ENOMEM;
 
+	FLS_INFO("fls_rfs_event_max: %u\n", fls_rfs_event_max);
 	event_log.mask = FLS_RFS_EVENT_MASK(fls_rfs_event_max);
 
 	/*
