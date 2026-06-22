@@ -40,6 +40,8 @@ uint32_t fls_def_sensor_xxl_window;
 uint32_t fls_def_sensor_xl_window;
 uint32_t fls_def_sensor_sample_freq;
 struct hrtimer global_timer;
+uint8_t xl_period_ticks;
+uint8_t xxl_period_ticks;
 
 static void fls_def_sensor_window_to_event_window(struct fls_def_sensor_window *orig_sw, struct fls_def_sensor_window *repl_sw, struct fls_def_event_window *ew)
 {
@@ -640,10 +642,18 @@ static enum hrtimer_restart fls_def_sensor_window_timer_callback(struct hrtimer 
 		/*
 		 * Check if HWM was exceeded
 		 */
-		if ((fls_def_sensor_pkts_hwm && (cmn->orig->stats.isd.samples[sample_index].window[window_index].packets >= fls_def_sensor_pkts_hwm ||
-			cmn->reply->stats.isd.samples[sample_index].window[window_index].packets >= fls_def_sensor_pkts_hwm)) ||
-			(fls_def_sensor_bytes_hwm && ((cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes >= fls_def_sensor_bytes_hwm) ||
-			cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes >= fls_def_sensor_bytes_hwm))) {
+
+		/* Scale HWM by 20% to account for difference in expected values.
+		 * Expectation is that the values set via DebugFS are in units of per/second.
+		 * However, this timer fires ever 1.2 seconds so there is a mismatch of ~20%.
+		 */
+		uint32_t fls_def_sensor_pkts_hwm_scaled = ((fls_def_sensor_pkts_hwm * 120) / 100);
+		uint32_t fls_def_sensor_bytes_hwm_scaled = ((fls_def_sensor_bytes_hwm * 120) / 100);
+
+		if ((fls_def_sensor_pkts_hwm && (cmn->orig->stats.isd.samples[sample_index].window[window_index].packets >= fls_def_sensor_pkts_hwm_scaled ||
+			cmn->reply->stats.isd.samples[sample_index].window[window_index].packets >= fls_def_sensor_pkts_hwm_scaled)) ||
+			(fls_def_sensor_bytes_hwm && ((cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes >= fls_def_sensor_bytes_hwm_scaled) ||
+			cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes >= fls_def_sensor_bytes_hwm_scaled))) {
 			FLS_WARN("%p HWM exceeded. orig_pkts=%u reply_pkts= %u pkt_hwm=%u, orig_bytes=%u reply_bytes=%u bytes_hwm=%u", cmn->orig, cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].packets,
 					cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].packets,fls_def_sensor_pkts_hwm, cmn->orig->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes,
 					cmn->reply->stats.isd.samples[sample_index].window[FLS_DEF_SENSOR_WINDOW_LG].bytes, fls_def_sensor_bytes_hwm);
@@ -729,7 +739,6 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 	struct fls_def_sensor_timer_data *data = container_of(timer, struct fls_def_sensor_timer_data, timer);
 	struct fls_conn_cmn *cmn;
 	ktime_t kt, now;
-	uint32_t quotient, remainder;
 
 	cmn = data->cmn;
 
@@ -739,16 +748,12 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 	}
 
 	/*
-	 * The timer will trigger at a frequency of the
-	 * greatest common factor between the xl and xxl
-	 * windows. To determine if enough calls of this timer
-	 * at a frequency of fls_def_sensor_sample_freq
-	 * have occured to call either the xl or xxl timer,
-	 * the window frequency is divided by the window count.
+	 * Trigger XL sampling event:
+	 * - Ensure xl_period_ticks is configured (non-zero)
+	 * - Use modulo of flags counter to determine periodic expiry
+	 *   (i.e., fire once every xl_period_ticks intervals)
 	 */
-	quotient = fls_def_sensor_xl_window / data->flags;
-	remainder = fls_def_sensor_xl_window % data->flags;
-	if (quotient == fls_def_sensor_sample_freq && remainder == 0) {
+	if (xl_period_ticks && (data->flags % xl_period_ticks) == 0) {
 		FLS_TRACE("xl sample timer expired %p\n", data->timer);
 
 		/*
@@ -769,16 +774,13 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 	}
 
 	/*
-	 * The timer will trigger at a frequency of the
-	 * greatest common factor between the xl and xxl
-	 * windows. To determine if enough calls of this timer
-	 * at a frequency of fls_def_sensor_sample_freq
-	 * have occured to call either the xl or xxl timer,
-	 * the window frequency is divided by the window count.
+	 * Trigger XXL sampling event:
+	 * - Ensure xxl_period_ticks is configured (non-zero)
+	 * - Fire event periodically based on flags counter
+	 *   (every xxl_period_ticks cycles)
+	 * - After XXL event, counter is reset to restart cycle
 	 */
-	quotient = fls_def_sensor_xxl_window / data->flags;
-	remainder = fls_def_sensor_xxl_window % data->flags;
-	if (quotient == fls_def_sensor_sample_freq && remainder == 0) {
+	if (xxl_period_ticks && (data->flags % xxl_period_ticks) == 0) {
 		FLS_TRACE("xxl sample timer expired %p\n", data->timer);
 
 		/*
