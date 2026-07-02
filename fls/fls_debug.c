@@ -9,6 +9,9 @@
 #include "fls_debug.h"
 #include "fls_flow.h"
 #include "fls_stats.h"
+#ifndef FLS_LITE_ENABLE
+#include <ecm_ae_classifier_public.h>
+#endif
 
 #define FLS_DEBUG_LEVEL_DEFAULT FLS_DEBUG_LEVEL_ERROR
 
@@ -243,6 +246,32 @@ static struct ctl_table fls_debug_table[] = {
 	{ }
 };
 
+/*
+ * fls_debug_ecm_flush_5tuple()
+ *     Ask ECM to defunct the connection matching this 5-tuple, forcing a
+ *     PPE-accelerated flow back to the SFE software path.
+ */
+static bool fls_debug_ecm_flush_5tuple(struct fls_cmdinfo *packetinfo)
+{
+	struct in6_addr src_ip6;
+	struct in6_addr dst_ip6;
+
+	if (packetinfo->version == 4) {
+		return ecm_ae_classifier_decelerate_v4_connection(packetinfo->src_ip[0],
+								packetinfo->src_port,
+								packetinfo->dst_ip[0],
+								packetinfo->dst_port,
+								packetinfo->protocol);
+	}
+
+	memcpy(&src_ip6, packetinfo->src_ip, sizeof(src_ip6));
+	memcpy(&dst_ip6, packetinfo->dst_ip, sizeof(dst_ip6));
+
+	return ecm_ae_classifier_decelerate_v6_connection(src_ip6, packetinfo->src_port,
+							dst_ip6, packetinfo->dst_port,
+							packetinfo->protocol);
+}
+
 static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, size_t length, loff_t *ppos)
 {
 	int count;
@@ -264,6 +293,7 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 					packetinfo.dst_ip,
 					packetinfo.dst_port);
 		if(conn) {
+			spin_lock_bh(&fct.lock);
 			conn->stats.isd.sendevent = false;
 			conn->traffic_class = packetinfo.data.classid;
 
@@ -277,10 +307,12 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 				if (conn->reverse) {
 					conn->reverse->flags &= ~SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
 				}
+				spin_unlock_bh(&fct.lock);
 				break;
 			}
 			FLS_TRACE("Lookup succeed! Stop XXL collection (For this epoch).");
 			fls_debug_print_conn_info(conn);
+			spin_unlock_bh(&fct.lock);
 		} else {
 			FLS_TRACE("Lookup failed!\n");
 		}
@@ -297,6 +329,33 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 
 	case FLS_PFS_CLEAN_EVENTS:
 		fls_rfs_clean_events();
+		break;
+
+	case FLS_PFS_REINSPECT:
+		FLS_TRACE("\nFLS: Receive reinspect command.\n");
+		conn = fls_conn_lookup(packetinfo.version, packetinfo.protocol,
+					packetinfo.src_ip,
+					packetinfo.src_port,
+					packetinfo.dst_ip,
+					packetinfo.dst_port);
+		if (conn) {
+			spin_lock_bh(&fct.lock);
+			FLS_TRACE("Lookup succeeded! Resume stats collection.\n");
+			conn->flags |= SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+			conn->stats.isd.sendevent = true;
+			if (conn->reverse) {
+				conn->reverse->flags |= SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+				conn->reverse->stats.isd.sendevent = true;
+			}
+			fls_debug_print_conn_info(conn);
+			spin_unlock_bh(&fct.lock);
+			break;
+		}
+
+		FLS_TRACE("Lookup failed! Flow may be in PPE, flushing 5-tuple via ECM.\n");
+		if (!fls_debug_ecm_flush_5tuple(&packetinfo)) {
+			FLS_WARN("ECM flush for reinspect 5-tuple did not find a matching connection.\n");
+		}
 		break;
 
 	default:
