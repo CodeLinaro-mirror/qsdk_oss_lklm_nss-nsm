@@ -31,7 +31,6 @@
 #define FLS_RFS_WINDOWS_MAX 3
 #define FLS_RFS_EVENTS_LIMIT 5
 #define FLS_RFS_TELEMETRY_DATA_TYPE 2
-#define FLS_RFS_WRITE_DELAY msecs_to_jiffies(50)
 
 enum FLS_PROTOCOL_TYPE
 {

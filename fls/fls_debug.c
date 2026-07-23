@@ -60,6 +60,27 @@ static int fls_debug_sample_timer_freq_handler(struct ctl_table *table, int writ
 		}
 		fls_def_sensor_sample_freq = tmp_xl;
 
+		/*
+		 * Sample frequency must be non-zero, otherwise period tick calculations
+		 * (XL/XXL intervals) are invalid and would cause divide-by-zero issues.
+		 */
+		if (!fls_def_sensor_sample_freq) {
+			FLS_ERROR("sample_freq is 0, cannot compute XL/XXL period ticks\n");
+			return -EINVAL;
+		}
+
+		/*
+		 * Precompute number of timer invocations (ticks) required to reach
+		 * XL and XXL window boundaries.
+		 * This converts time-based windows into tick counts so that periodic
+		 * expiry can be efficiently checked using modulo on data->flags
+		 * instead of performing division during every timer callback.
+		 */
+		xl_period_ticks = fls_def_sensor_xl_window / fls_def_sensor_sample_freq;
+		xxl_period_ticks = fls_def_sensor_xxl_window / fls_def_sensor_sample_freq;
+
+		FLS_INFO("XL Period Ticks: %u\n", xl_period_ticks);
+		FLS_INFO("XXL Period Ticks: %u\n", xxl_period_ticks);
 		FLS_INFO("XL/XXL sample Frequency: %u\n", fls_def_sensor_sample_freq);
     	}
 

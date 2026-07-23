@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: ISC
  */
 
-#define FLS_RFS_EVENT_MAX 128
-#define FLS_RFS_EVENT_MASK (FLS_RFS_EVENT_MAX - 1)
+/*
+ * Default values for RFS module parameters
+ */
+#define FLS_RFS_EVENT_MAX_DEFAULT 256
+#define FLS_RFS_EVENT_MASK(max) ((max) - 1)
 
 #include <linux/module.h>
 #include <linux/ktime.h>
@@ -13,6 +16,7 @@
 #include <linux/poll.h>
 #include <linux/version.h>
 #include <linux/delay.h>
+#include <linux/vmalloc.h>
 
 #include "fls_debug.h"
 #include "fls_rfs.h"
@@ -21,12 +25,33 @@
 struct fls_event_log {
 	uint32_t read_index;
 	uint32_t write_index;
-	struct fls_event event_ring_buf[FLS_RFS_EVENT_MAX];
+	struct fls_event *event_ring_buf;
+	uint32_t mask;
 	spinlock_t read_lock;
 	spinlock_t write_lock;
 };
 
 static struct fls_rfs rfs;
+
+static int fls_rfs_subbuf_factor = 1;
+module_param(fls_rfs_subbuf_factor, int, 0644);
+MODULE_PARM_DESC(fls_rfs_subbuf_factor, "Multiplier for RFS sub-buffer size");
+
+static int fls_rfs_n_subbufs = 1;
+module_param(fls_rfs_n_subbufs, int, 0644);
+MODULE_PARM_DESC(fls_rfs_n_subbufs, "Number of RFS sub-buffers");
+
+static u32 fls_rfs_event_max = FLS_RFS_EVENT_MAX_DEFAULT;
+module_param(fls_rfs_event_max, uint, 0644);
+MODULE_PARM_DESC(fls_rfs_event_max, "Maximum number of events in the ring buffer (must be power of 2 and >= 2)");
+
+static u32 fls_rfs_write_delay_ms = 0;
+module_param(fls_rfs_write_delay_ms, uint, 0644);
+MODULE_PARM_DESC(fls_rfs_write_delay_ms, "Delay in milliseconds between write attempts when RFS channel is full");
+
+static u32 fls_event_queue_delay_ms = 10;
+module_param(fls_event_queue_delay_ms, uint, 0644);
+MODULE_PARM_DESC(fls_event_queue_delay_ms, "Delay in milliseconds before processing queued events");
 
 atomic_t fls_rfs_active = ATOMIC_INIT(0);
 struct delayed_work fls_rfs_work;
@@ -55,7 +80,7 @@ void fls_rfs_clean_events(void)
 
 	spin_lock_irqsave(&event_log.write_lock, irqflags_write);
 
-	memset(event_log.event_ring_buf, 0, sizeof(event_log.event_ring_buf));
+	memset(event_log.event_ring_buf, 0, (event_log.mask + 1) * sizeof(struct fls_event));
 	printk("Flushed FLS rfs ring buffer, WI = %u, RI = %u", event_log.write_index, event_log.read_index);
 	event_log.write_index = 0;
 
@@ -77,6 +102,7 @@ void fls_rfs_clean_events(void)
 
 void fls_rfs_write(struct work_struct *work) {
 	unsigned long irqflags;
+	unsigned budget = event_log.mask;
 
 	if (atomic_read(&fls_rfs_active) == 0) {
 		FLS_WARN("Write failed. RFS inactive.\n");
@@ -91,25 +117,31 @@ void fls_rfs_write(struct work_struct *work) {
 
 	spin_lock_irqsave(&event_log.read_lock, irqflags);
 
-	if (relay_buf_full(rfs.rbuf)) {
-		FLS_TRACE("RFS Buffer is Full, did not write\n");
-		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_BUFF_FULL]);
-		goto queue_work;
+	while (budget) {
+		if (relay_buf_full(rfs.rbuf)) {
+			FLS_TRACE("RFS Buffer is Full, did not write\n");
+			atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_BUFF_FULL]);
+			goto queue_work;
+		}
+
+		if (event_log.read_index == event_log.write_index) {
+			spin_unlock_irqrestore(&event_log.read_lock, irqflags);
+			atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_EXCEPTION_NO_EVENT_PENDING]);
+			FLS_TRACE("Event log is empty. read_index:%d, write_index:%d\n", event_log.read_index, event_log.write_index);
+			return;
+		}
+
+		memcpy(buf + sizeof(struct fls_rfs_telemetry_agent_header), &(event_log.event_ring_buf[event_log.read_index]), sizeof(struct fls_event));
+		event_log.read_index = (event_log.read_index + 1) & event_log.mask;
+
+		relay_write(rfs.rfschan , &buf, sizeof(buf));
+		relay_flush(rfs.rfschan);
+		FLS_TRACE("Wrote once\n");
+		budget--;
 	}
 
-	if (event_log.read_index == event_log.write_index) {
-		spin_unlock_irqrestore(&event_log.read_lock, irqflags);
-		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_EXCEPTION_NO_EVENT_PENDING]);
-		FLS_ERROR("Event log is empty. read_index:%d, write_index:%d\n", event_log.read_index, event_log.write_index);
-		return;
-	}
-
-	memcpy(buf + sizeof(struct fls_rfs_telemetry_agent_header), &(event_log.event_ring_buf[event_log.read_index]), sizeof(struct fls_event));
-	event_log.read_index = (event_log.read_index + 1) & FLS_RFS_EVENT_MASK;
-
-	relay_write(rfs.rfschan , &buf, sizeof(buf));
-	relay_flush(rfs.rfschan);
-	FLS_TRACE("Wrote once\n");
+	spin_unlock_irqrestore(&event_log.read_lock, irqflags);
+	return;
 
 queue_work:
 	/*
@@ -118,7 +150,7 @@ queue_work:
 	 * to write again and aren't dependent on the enqueue() event
 	 */
 	if (event_log.read_index != event_log.write_index && atomic_read(&fls_rfs_active) == 1) {
-		queue_delayed_work(fls_rfs_workqueue, &fls_rfs_work, FLS_RFS_WRITE_DELAY);
+		queue_delayed_work(fls_rfs_workqueue, &fls_rfs_work, msecs_to_jiffies(fls_rfs_write_delay_ms));
 	}
 
 	spin_unlock_irqrestore(&event_log.read_lock, irqflags);
@@ -138,7 +170,7 @@ bool fls_rfs_enqueue(struct fls_event *event)
 	fls_debug_print_event_info(event);
 
 	spin_lock_irqsave(&event_log.write_lock, irqflags);
-	if (((event_log.write_index + 1) & FLS_RFS_EVENT_MASK) == event_log.read_index) {
+	if (((event_log.write_index + 1) & event_log.mask) == event_log.read_index) {
 		spin_unlock_irqrestore(&event_log.write_lock, irqflags);
 		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_RFS_EXCEPTION_EVENT_QUEUE_FULL]);
 		return false;
@@ -146,7 +178,7 @@ bool fls_rfs_enqueue(struct fls_event *event)
 
 	write_index = event_log.write_index;
 	event_log.event_ring_buf[write_index] = *event;
-	event_log.write_index = (write_index + 1) & FLS_RFS_EVENT_MASK;
+	event_log.write_index = (write_index + 1) & event_log.mask;
 	spin_unlock_irqrestore(&event_log.write_lock, irqflags);
 
 	FLS_INFO("Enqeued flow event at index [%u]", write_index);
@@ -155,7 +187,7 @@ bool fls_rfs_enqueue(struct fls_event *event)
 	 * Only queue write task if there is not a write task already queued
 	 */
 	if (!delayed_work_pending(&fls_rfs_work)) {
-		queue_delayed_work(fls_rfs_workqueue, &fls_rfs_work, FLS_RFS_WRITE_DELAY);
+		queue_delayed_work(fls_rfs_workqueue, &fls_rfs_work, msecs_to_jiffies(fls_event_queue_delay_ms));
 		FLS_TRACE("Queued work to write to RFS\n");
 	} else {
 		FLS_TRACE("Did not queue RFS write work due to existing work in queue\n");
@@ -191,6 +223,11 @@ void fls_rfs_shutdown(void)
 	if (rfs.rfschan) {
 		relay_close(rfs.rfschan);
 		rfs.rfschan = NULL;
+	}
+
+	if (event_log.event_ring_buf) {
+		vfree(event_log.event_ring_buf);
+		event_log.event_ring_buf = NULL;
 	}
 
 	/*
@@ -244,6 +281,16 @@ static struct rchan_callbacks fls_rfs_telemetry_agent_cb = {
 int fls_rfs_init(void)
 {
 	struct fls_rfs_telemetry_agent_header tah;
+	int subbuf_size;
+
+	/*
+	 * Validate event_max is a power of 2 and >= 2
+	 */
+	if (fls_rfs_event_max < 2 || (fls_rfs_event_max & (fls_rfs_event_max - 1))) {
+		FLS_WARN("Invalid event_max %u, must be power of 2 and >= 2. Using default %d\n",
+			fls_rfs_event_max, FLS_RFS_EVENT_MAX_DEFAULT);
+		fls_rfs_event_max = FLS_RFS_EVENT_MAX_DEFAULT;
+	}
 
 	spin_lock_init(&event_log.read_lock);
 	spin_lock_init(&event_log.write_lock);
@@ -256,20 +303,38 @@ int fls_rfs_init(void)
 		return -EPERM;
 	}
 
+	/*
+	 * Initialize event ring buffer using the module parameter
+	 */
+	event_log.event_ring_buf = vzalloc(fls_rfs_event_max * sizeof(struct fls_event));
+	if (!event_log.event_ring_buf)
+		return -ENOMEM;
+
+	FLS_INFO("fls_rfs_event_max: %u\n", fls_rfs_event_max);
+	event_log.mask = FLS_RFS_EVENT_MASK(fls_rfs_event_max);
+
+	/*
+	 * Calculate the sub-buffer size for FLS, based on the subbuf_factor (multiple of the message size)
+	 */
+	subbuf_size = fls_rfs_subbuf_factor * (sizeof(struct fls_rfs_telemetry_agent_header) + sizeof(struct fls_event));
 	rfs.rfschan = relay_open("fls_ifli",
 		rfs.de,
-		(sizeof(struct fls_rfs_telemetry_agent_header) + sizeof(struct fls_event)),
-		 1, &fls_rfs_telemetry_agent_cb, NULL);
+		subbuf_size,
+		fls_rfs_n_subbufs, &fls_rfs_telemetry_agent_cb, NULL);
 	if (!rfs.rfschan) {
 		debugfs_remove_recursive(rfs.de);
 		rfs.de = NULL;
 		fls_debug_root_dir = NULL;
+		vfree(event_log.event_ring_buf);
+		event_log.event_ring_buf = NULL;
 		return -EPERM;
 	}
 
 	fls_rfs_workqueue = create_singlethread_workqueue("fls_rfs_workqueue");
 	if(!fls_rfs_workqueue) {
 		FLS_WARN("Failed to initialize FLS RFS workqueue\n");
+		vfree(event_log.event_ring_buf);
+		event_log.event_ring_buf = NULL;
 		relay_close(rfs.rfschan);
 		rfs.rfschan = NULL;
 		debugfs_remove_recursive(rfs.de);
