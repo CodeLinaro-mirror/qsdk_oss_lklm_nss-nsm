@@ -40,8 +40,6 @@ uint32_t fls_def_sensor_xxl_window;
 uint32_t fls_def_sensor_xl_window;
 uint32_t fls_def_sensor_sample_freq;
 struct hrtimer global_timer;
-uint8_t xl_period_ticks;
-uint8_t xxl_period_ticks;
 
 static void fls_def_sensor_window_to_event_window(struct fls_def_sensor_window *orig_sw, struct fls_def_sensor_window *repl_sw, struct fls_def_event_window *ew)
 {
@@ -723,6 +721,7 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 	struct fls_def_sensor_timer_data *data = container_of(timer, struct fls_def_sensor_timer_data, timer);
 	struct fls_conn_cmn *cmn;
 	ktime_t kt, now;
+	uint32_t quotient, remainder;
 
 	cmn = data->cmn;
 
@@ -732,12 +731,16 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 	}
 
 	/*
-	 * Trigger XL sampling event:
-	 * - Ensure xl_period_ticks is configured (non-zero)
-	 * - Use modulo of flags counter to determine periodic expiry
-	 *   (i.e., fire once every xl_period_ticks intervals)
+	 * The timer will trigger at a frequency of the
+	 * greatest common factor between the xl and xxl
+	 * windows. To determine if enough calls of this timer
+	 * at a frequency of fls_def_sensor_sample_freq
+	 * have occured to call either the xl or xxl timer,
+	 * the window frequency is divided by the window count.
 	 */
-	if (xl_period_ticks && (data->flags % xl_period_ticks) == 0) {
+	quotient = fls_def_sensor_xl_window / data->flags;
+	remainder = fls_def_sensor_xl_window % data->flags;
+	if (quotient == fls_def_sensor_sample_freq && remainder == 0) {
 		FLS_TRACE("xl sample timer expired %p\n", data->timer);
 
 		/*
@@ -758,13 +761,16 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 	}
 
 	/*
-	 * Trigger XXL sampling event:
-	 * - Ensure xxl_period_ticks is configured (non-zero)
-	 * - Fire event periodically based on flags counter
-	 *   (every xxl_period_ticks cycles)
-	 * - After XXL event, counter is reset to restart cycle
+	 * The timer will trigger at a frequency of the
+	 * greatest common factor between the xl and xxl
+	 * windows. To determine if enough calls of this timer
+	 * at a frequency of fls_def_sensor_sample_freq
+	 * have occured to call either the xl or xxl timer,
+	 * the window frequency is divided by the window count.
 	 */
-	if (xxl_period_ticks && (data->flags % xxl_period_ticks) == 0) {
+	quotient = fls_def_sensor_xxl_window / data->flags;
+	remainder = fls_def_sensor_xxl_window % data->flags;
+	if (quotient == fls_def_sensor_sample_freq && remainder == 0) {
 		FLS_TRACE("xxl sample timer expired %p\n", data->timer);
 
 		/*

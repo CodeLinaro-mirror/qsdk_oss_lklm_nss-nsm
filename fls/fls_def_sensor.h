@@ -44,8 +44,6 @@ extern uint32_t fls_def_sensor_xxl_long;
 extern uint32_t fls_def_sensor_xxl_window;
 extern uint32_t fls_def_sensor_xl_window;
 extern uint32_t fls_def_sensor_sample_freq;
-extern uint8_t xl_period_ticks;
-extern uint8_t xxl_period_ticks;
 
 struct fls_def_sensor_burst {
 	bool active;
