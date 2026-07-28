@@ -15,6 +15,10 @@
 
 #define FLS_DEBUG_LEVEL_DEFAULT FLS_DEBUG_LEVEL_ERROR
 
+#ifndef FLS_LITE_ENABLE
+static int fls_conn_ipv4_sprint(uint32_t addr, char *str, size_t len);
+#endif
+
 static uint32_t fls_debug_level_current;
 static uint32_t fls_debug_level_min = FLS_DEBUG_LEVEL_NONE;
 static uint32_t fls_debug_level_max = FLS_DEBUG_LEVEL_MAX - 1;
@@ -234,8 +238,17 @@ static bool fls_debug_ecm_flush_5tuple(struct fls_cmdinfo *packetinfo)
 {
 	struct in6_addr src_ip6;
 	struct in6_addr dst_ip6;
+	char src_str[16];
+	char dst_str[16];
 
 	if (packetinfo->version == 4) {
+		fls_conn_ipv4_sprint(packetinfo->src_ip[0], src_str, sizeof(src_str));
+		fls_conn_ipv4_sprint(packetinfo->dst_ip[0], dst_str, sizeof(dst_str));
+		FLS_WARN("ECM flush v4 request: proto=%u src=%s:%hu dst=%s:%hu (raw src_port=0x%04x dst_port=0x%04x)\n",
+				packetinfo->protocol, src_str, ntohs(packetinfo->src_port),
+				dst_str, ntohs(packetinfo->dst_port),
+				packetinfo->src_port, packetinfo->dst_port);
+
 		return ecm_ae_classifier_decelerate_v4_connection(packetinfo->src_ip[0],
 								packetinfo->src_port,
 								packetinfo->dst_ip[0],
@@ -245,6 +258,11 @@ static bool fls_debug_ecm_flush_5tuple(struct fls_cmdinfo *packetinfo)
 
 	memcpy(&src_ip6, packetinfo->src_ip, sizeof(src_ip6));
 	memcpy(&dst_ip6, packetinfo->dst_ip, sizeof(dst_ip6));
+
+	FLS_WARN("ECM flush v6 request: proto=%u src=%pI6c:%hu dst=%pI6c:%hu (raw src_port=0x%04x dst_port=0x%04x)\n",
+			packetinfo->protocol, &src_ip6, ntohs(packetinfo->src_port),
+			&dst_ip6, ntohs(packetinfo->dst_port),
+			packetinfo->src_port, packetinfo->dst_port);
 
 	return ecm_ae_classifier_decelerate_v6_connection(src_ip6, packetinfo->src_port,
 							dst_ip6, packetinfo->dst_port,
@@ -256,11 +274,32 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 	int count;
 	struct fls_cmdinfo packetinfo;
 	struct fls_conn *conn;
+	char src_str[16];
+	char dst_str[16];
 
 	count = min(length, sizeof(struct fls_cmdinfo));
 	if (copy_from_user((char*)&packetinfo, buffer, count)) {
 		FLS_ERROR("copy from user failed.\n");
 		return -EFAULT;
+	}
+
+	if (packetinfo.version == 4) {
+		fls_conn_ipv4_sprint(packetinfo.src_ip[0], src_str, sizeof(src_str));
+		fls_conn_ipv4_sprint(packetinfo.dst_ip[0], dst_str, sizeof(dst_str));
+		FLS_TRACE("FLS: Received cmd=%u ipv=%u proto=%u src=%s:%hu dst=%s:%hu\n",
+				packetinfo.cmd, packetinfo.version, packetinfo.protocol,
+				src_str, ntohs(packetinfo.src_port),
+				dst_str, ntohs(packetinfo.dst_port));
+	} else {
+		struct in6_addr src_ip6;
+		struct in6_addr dst_ip6;
+
+		memcpy(&src_ip6, packetinfo.src_ip, sizeof(src_ip6));
+		memcpy(&dst_ip6, packetinfo.dst_ip, sizeof(dst_ip6));
+		FLS_TRACE("FLS: Received cmd=%u ipv=%u proto=%u src=%pI6c:%hu dst=%pI6c:%hu\n",
+				packetinfo.cmd, packetinfo.version, packetinfo.protocol,
+				&src_ip6, ntohs(packetinfo.src_port),
+				&dst_ip6, ntohs(packetinfo.dst_port));
 	}
 
 	switch (packetinfo.cmd) {
