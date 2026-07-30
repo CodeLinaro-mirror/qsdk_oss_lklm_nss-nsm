@@ -578,14 +578,15 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 	orig->dir = FLS_CONN_DIRECTION_ORIG;
 	reply->dir = FLS_CONN_DIRECTION_RET;
 
-	/*
-	 * Initialize event timers for common data
-	 */
-	fls_def_sensor_timer_init(cmn->timers);
 	cmn->orig = orig;
 	cmn->reply = reply;
 	orig->cmn = cmn;
 	reply->cmn = cmn;
+
+	/*
+	 * Initialize event timers for common data
+	 */
+	fls_def_sensor_timer_init(cmn->timers);
 
 	return orig;
 }

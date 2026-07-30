@@ -276,6 +276,7 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 	struct fls_conn *conn;
 	char src_str[16];
 	char dst_str[16];
+	bool found;
 
 	count = min(length, sizeof(struct fls_cmdinfo));
 	if (copy_from_user((char*)&packetinfo, buffer, count)) {
@@ -357,22 +358,40 @@ static ssize_t fls_pfsops_write(struct file *file, const char __user *buffer, si
 					packetinfo.dst_ip,
 					packetinfo.dst_port);
 		if (conn) {
+			FLS_WARN("Lookup succeeded! Resume stats collection.\n");
+
 			spin_lock_bh(&fct.lock);
-			FLS_TRACE("Lookup succeeded! Resume stats collection.\n");
-			conn->flags |= SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-			conn->stats.isd.sendevent = true;
-			if (conn->reverse) {
-				conn->reverse->flags |= SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
-				conn->reverse->stats.isd.sendevent = true;
-			}
 			fls_debug_print_conn_info(conn);
 			spin_unlock_bh(&fct.lock);
+
+			if (packetinfo.version == 4) {
+				found = sfe_ipv4_fls_enable(packetinfo.protocol, packetinfo.src_ip[0], packetinfo.src_port,
+							packetinfo.dst_ip[0], packetinfo.dst_port);
+			} else {
+				found = sfe_ipv6_fls_enable(packetinfo.protocol, packetinfo.src_ip, packetinfo.src_port,
+							packetinfo.dst_ip, packetinfo.dst_port);
+			}
+
+			if (found) {
+				/*
+				 * Rearm must happen outside fct.lock: it calls hrtimer_cancel(),
+				 * which can block waiting for a running timer callback to finish.
+				 */
+				fls_def_sensor_conn_rearm(conn);
+			} else {
+				FLS_WARN("SFE fls_enable did not find a matching connection-match for reinspect 5-tuple.\n");
+				atomic_inc(&conn->fls_conn_exception_counters[FLS_CONN_EXCEPTION_REINSPECT_SFE_ENABLE_FAIL]);
+				if (conn->reverse) {
+					atomic_inc(&conn->reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_REINSPECT_SFE_ENABLE_FAIL]);
+				}
+			}
 			break;
 		}
 
 		FLS_TRACE("Lookup failed! Flow may be in PPE, flushing 5-tuple via ECM.\n");
 		if (!fls_debug_ecm_flush_5tuple(&packetinfo)) {
 			FLS_WARN("ECM flush for reinspect 5-tuple did not find a matching connection.\n");
+			atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_REINSPECT_ECM_FLUSH_FAIL]);
 		}
 		break;
 

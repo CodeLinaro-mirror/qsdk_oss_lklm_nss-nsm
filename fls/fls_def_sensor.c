@@ -805,24 +805,88 @@ static enum hrtimer_restart fls_def_sensor_sample_timer_callback(struct hrtimer 
 
 void fls_def_sensor_timer_delete(struct fls_conn *conn)
 {
-	if (!conn->cmn) {
+	if (!conn->cmn || !conn->cmn->timers) {
 		return;
 	}
 
-	if (conn->cmn->timers->delay_timer->timer.function) {
+	if (conn->cmn->timers->delay_timer && conn->cmn->timers->delay_timer->timer.function) {
 		hrtimer_cancel(&conn->cmn->timers->delay_timer->timer);
 		conn->cmn->timers->delay_timer->timer.function = NULL;
 	}
 
-	if (conn->cmn->timers->window_timer->timer.function) {
+	if (conn->cmn->timers->window_timer && conn->cmn->timers->window_timer->timer.function) {
 		hrtimer_cancel(&conn->cmn->timers->window_timer->timer);
 		conn->cmn->timers->window_timer->timer.function = NULL;
 	}
-	if (conn->cmn->timers->xl_xxl_timer->timer.function) {
+	if (conn->cmn->timers->xl_xxl_timer && conn->cmn->timers->xl_xxl_timer->timer.function) {
 		hrtimer_cancel(&conn->cmn->timers->xl_xxl_timer->timer);
 		conn->cmn->timers->xl_xxl_timer->timer.function = NULL;
 	}
 	atomic_inc(&conn->fls_conn_counters[FLS_CONN_TIMER_DELETE]);
+}
+
+/*
+ * fls_def_sensor_conn_rearm()
+ *	Restarts default-sensor stats collection for a connection pair as if
+ *	newly created. Used when a previously stopped/disabled connection is
+ *	reinspected, since fls_def_sensor_timer_delete() leaves timer.function
+ *	NULL and packet_cb() only (re)arms the delay timer on a zero
+ *	first_packet_time.
+ */
+void fls_def_sensor_conn_rearm(struct fls_conn *conn)
+{
+	struct fls_conn *reply;
+	struct fls_conn_cmn *cmn;
+
+	/*
+	 * Timer cancellation must happen outside fct.lock: hrtimer_cancel()
+	 * can block waiting for a running callback, which is unsafe under a
+	 * bh-spinlock.
+	 */
+	fls_def_sensor_timer_delete(conn);
+
+	/*
+	 * conn->reverse is only safe to read/deref under fct.lock, since a
+	 * concurrent delete (e.g. via the RCU-callback teardown path) can
+	 * free the reverse connection and clear this side's pointer.
+	 */
+	spin_lock_bh(&fct.lock);
+	reply = conn->reverse;
+
+	conn->flags = SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+	conn->stats.isd.first_packet_time = 0;
+	conn->stats.isd.events = 0;
+	conn->stats.isd.sample_index = 0;
+	conn->stats.isd.sendevent = true;
+	memset(conn->stats.isd.samples, 0, sizeof(conn->stats.isd.samples));
+	memset(&conn->stats.isd.xxl_sample, 0, sizeof(conn->stats.isd.xxl_sample));
+	memset(&conn->stats.isd.xl_sample, 0, sizeof(conn->stats.isd.xl_sample));
+
+	if (reply) {
+		reply->flags = SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+		reply->stats.isd.first_packet_time = 0;
+		reply->stats.isd.events = 0;
+		reply->stats.isd.sample_index = 0;
+		reply->stats.isd.sendevent = true;
+		memset(reply->stats.isd.samples, 0, sizeof(reply->stats.isd.samples));
+		memset(&reply->stats.isd.xxl_sample, 0, sizeof(reply->stats.isd.xxl_sample));
+		memset(&reply->stats.isd.xl_sample, 0, sizeof(reply->stats.isd.xl_sample));
+	}
+
+	/*
+	 * cmn must be read and used to init timers while still holding
+	 * fct.lock: a concurrent fls_conn_delete() also takes fct.lock
+	 * before freeing cmn, so releasing the lock before this point would
+	 * leave a window where cmn could be freed out from under us.
+	 * fls_def_sensor_timer_init() only calls hrtimer_init()/atomic_inc(),
+	 * neither of which blocks or re-takes fct.lock, so it is safe to
+	 * call here.
+	 */
+	cmn = conn->cmn;
+	if (cmn) {
+		fls_def_sensor_timer_init(cmn->timers);
+	}
+	spin_unlock_bh(&fct.lock);
 }
 
 uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb)
@@ -979,6 +1043,8 @@ uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct s
  */
 void fls_def_sensor_timer_init(struct fls_def_sensor_timers *timers)
 {
+	struct fls_conn_cmn *cmn = timers->delay_timer->cmn;
+
 	/*
 	 * Initialize delay timer
 	 */
@@ -996,6 +1062,9 @@ void fls_def_sensor_timer_init(struct fls_def_sensor_timers *timers)
 	 */
 	hrtimer_init(&timers->xl_xxl_timer->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	timers->xl_xxl_timer->timer.function = &fls_def_sensor_sample_timer_callback;
+
+	atomic_inc(&cmn->orig->fls_conn_counters[FLS_CONN_TIMER_INIT]);
+	atomic_inc(&cmn->reply->fls_conn_counters[FLS_CONN_TIMER_INIT]);
 }
 
 bool fls_def_sensor_init(struct fls_sensor_manager *fsm)

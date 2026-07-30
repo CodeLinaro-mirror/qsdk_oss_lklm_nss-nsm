@@ -121,6 +121,7 @@ struct fls_gro_frag_stats {
 
 void fls_def_sensor_timer_init(struct fls_def_sensor_timers *timers);
 void fls_def_sensor_timer_delete(struct fls_conn *conn);
+void fls_def_sensor_conn_rearm(struct fls_conn *conn);
 bool fls_def_sensor_init(struct fls_sensor_manager *fsm);
 uint8_t fls_def_sensor_packet_cb(void *app_data, struct fls_conn *conn, struct sk_buff *skb);
 #endif

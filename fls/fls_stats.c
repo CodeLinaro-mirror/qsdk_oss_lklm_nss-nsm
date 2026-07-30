@@ -33,6 +33,7 @@ static const char *fls_conn_counters_str[] = {
 	"fls_conn_rfs_enqueue_xl_count",
 	"fls_conn_rfs_event_type_def_count",
 	"fls_conn_per_conn_delay_finished",
+	"fls_conn_timer_init",
 	"fls_conn_timer_delete"
 };
 
@@ -47,7 +48,8 @@ static const char *fls_conn_exception_counters_str[] = {
 	"fls_conn_sensor_max_event_exceeded",
 	"fls_conn_exception_cannot_create_event_unidir_flow",
 	"fls_conn_exception_invalid_flags_window_timer_callback",
-	"fls_conn_exception_default_sensor_disabled"
+	"fls_conn_exception_default_sensor_disabled",
+	"fls_conn_exception_reinspect_sfe_enable_fail"
 };
 
 /*
@@ -68,7 +70,8 @@ static const char *fls_gbl_exception_counters_str[] = {
 	"fls_gbl_rfs_exception_channel_not_init",
 	"fls_gbl_rfs_exception_buff_full",
 	"fls_gbl_rfs_exception_no_event_pending",
-	"fls_gbl_rfs_exception_event_queue_full"
+	"fls_gbl_rfs_exception_event_queue_full",
+	"fls_gbl_exception_reinspect_ecm_flush_fail"
 };
 
 /*
