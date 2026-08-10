@@ -6,6 +6,7 @@
 #include <linux/types.h>
 #include <linux/ip.h>
 #include <linux/inet.h>
+#include <linux/percpu.h>
 #include <net/gro.h>
 
 #include "fls_conn.h"
@@ -30,7 +31,7 @@ uint32_t fls_def_sensor_burst_threshold[FLS_DEF_SENSOR_WINDOWS];
 uint32_t fls_def_sensor_burst_short_intvl[FLS_DEF_SENSOR_WINDOWS];
 uint32_t fls_def_sensor_burst_long_intvl[FLS_DEF_SENSOR_WINDOWS];
 bool fls_def_sensor_dynamic_samples;
-static struct fls_event event;
+DEFINE_PER_CPU(struct fls_event, per_cpu_event);
 uint32_t fls_def_sensor_pkts_hwm;
 uint32_t fls_def_sensor_bytes_hwm;
 uint32_t fls_def_sensor_xxl_sz_threshold;
@@ -119,6 +120,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 	uint32_t i;
 	struct fls_conn *orig;
 	struct fls_conn *reverse;
+	struct fls_event *event;
 
 	if (!conn->reverse) {
 		FLS_WARN("%p cannot create event for unidirectional flow.", conn);
@@ -134,34 +136,41 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 		reverse = conn;
 	}
 
-	event.event_type = type;
+	/*
+	 * Timer callbacks run with preemption disabled by the hrtimer
+	 * infrastructure, so smp_processor_id() safely identifies the
+	 * current CPU for per-CPU event buffer access.
+	 */
+	event = &per_cpu(per_cpu_event, smp_processor_id());
 
-	event.dir = 0xEB;
-	event.ip_version = conn->ip_version;
-	event.protocol = conn->protocol;
+	event->event_type = type;
 
-	event.orig_src_port = orig->src_port;
-	event.orig_dest_port = orig->dest_port;
-	event.orig_src_ip[0] = orig->src_ip[0];
-	event.orig_src_ip[1] = orig->src_ip[1];
-	event.orig_src_ip[2] = orig->src_ip[2];
-	event.orig_src_ip[3] = orig->src_ip[3];
-	event.orig_dest_ip[0] = orig->dest_ip[0];
-	event.orig_dest_ip[1] = orig->dest_ip[1];
-	event.orig_dest_ip[2] = orig->dest_ip[2];
-	event.orig_dest_ip[3] = orig->dest_ip[3];
+	event->dir = 0xEB;
+	event->ip_version = conn->ip_version;
+	event->protocol = conn->protocol;
 
-	event.ret_src_port = reverse->src_port;
-	event.ret_dest_port = reverse->dest_port;
-	event.ret_src_ip[0] = reverse->src_ip[0];
-	event.ret_src_ip[1] = reverse->src_ip[1];
-	event.ret_src_ip[2] = reverse->src_ip[2];
-	event.ret_src_ip[3] = reverse->src_ip[3];
-	event.ret_dest_ip[0] = reverse->dest_ip[0];
-	event.ret_dest_ip[1] = reverse->dest_ip[1];
-	event.ret_dest_ip[2] = reverse->dest_ip[2];
-	event.ret_dest_ip[3] = reverse->dest_ip[3];
-	event.timestamp = time;
+	event->orig_src_port = orig->src_port;
+	event->orig_dest_port = orig->dest_port;
+	event->orig_src_ip[0] = orig->src_ip[0];
+	event->orig_src_ip[1] = orig->src_ip[1];
+	event->orig_src_ip[2] = orig->src_ip[2];
+	event->orig_src_ip[3] = orig->src_ip[3];
+	event->orig_dest_ip[0] = orig->dest_ip[0];
+	event->orig_dest_ip[1] = orig->dest_ip[1];
+	event->orig_dest_ip[2] = orig->dest_ip[2];
+	event->orig_dest_ip[3] = orig->dest_ip[3];
+
+	event->ret_src_port = reverse->src_port;
+	event->ret_dest_port = reverse->dest_port;
+	event->ret_src_ip[0] = reverse->src_ip[0];
+	event->ret_src_ip[1] = reverse->src_ip[1];
+	event->ret_src_ip[2] = reverse->src_ip[2];
+	event->ret_src_ip[3] = reverse->src_ip[3];
+	event->ret_dest_ip[0] = reverse->dest_ip[0];
+	event->ret_dest_ip[1] = reverse->dest_ip[1];
+	event->ret_dest_ip[2] = reverse->dest_ip[2];
+	event->ret_dest_ip[3] = reverse->dest_ip[3];
+	event->timestamp = time;
 
 	if (type == FLS_RFS_EVENT_TYPE_XXL) {
 		FLS_TRACE("%px: %sEnqueue XXL event\n", conn, sendevent? "":"Skip ");
@@ -170,7 +179,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 		 * sample[0].window[0] contains large window data.
 		 * window will be closed until next sample starts.
 		 */
-		fls_def_sensor_window_to_event_window(&orig->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG], &reverse->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG],&event.def_event.samples[0].window[0]);
+		fls_def_sensor_window_to_event_window(&orig->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG], &reverse->stats.isd.xxl_sample.window[FLS_DEF_SENSOR_WINDOW_LG],&event->def_event.samples[0].window[0]);
 
 		orig->stats.isd.xxl_sample.last_packet_time = 0;
 		reverse->stats.isd.xxl_sample.last_packet_time = 0;
@@ -179,10 +188,10 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 		orig->stats.isd.xxl_sample.sample_start_time = time;
 		reverse->stats.isd.xxl_sample.sample_start_time = time;
 
-		event.def_event.window_length[0] = fls_def_sensor_xxl_window;
-		event.def_event.sample_count = 1;
+		event->def_event.window_length[0] = fls_def_sensor_xxl_window;
+		event->def_event.sample_count = 1;
 
-		if (sendevent && !fls_rfs_enqueue(&event)) {
+		if (sendevent && !fls_rfs_enqueue(event)) {
 			FLS_WARN("XXL Event dropped!\n");
 			atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XXL_FAIL]);
 			atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XXL_FAIL]);
@@ -204,7 +213,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 		 * sample[0].window[0] contains large window data.
 		 * window will be closed until next sample starts.
 		 */
-		fls_def_sensor_window_to_event_window(&orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG], &reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG],&event.def_event.samples[0].window[0]);
+		fls_def_sensor_window_to_event_window(&orig->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG], &reverse->stats.isd.xl_sample.window[FLS_DEF_SENSOR_WINDOW_LG],&event->def_event.samples[0].window[0]);
 
 		orig->stats.isd.xl_sample.last_packet_time = 0;
 		reverse->stats.isd.xl_sample.last_packet_time = 0;
@@ -212,10 +221,10 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 		orig->stats.isd.xl_sample.sample_start_time = time;
 		reverse->stats.isd.xl_sample.sample_start_time = time;
 
-		event.def_event.window_length[0] = fls_def_sensor_xl_window;
-		event.def_event.sample_count = 1;
+		event->def_event.window_length[0] = fls_def_sensor_xl_window;
+		event->def_event.sample_count = 1;
 
-		if (sendevent && !fls_rfs_enqueue(&event)) {
+		if (sendevent && !fls_rfs_enqueue(event)) {
 			FLS_WARN("XL Event dropped!\n");
 			atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XL_FAIL]);
 			atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_XL_FAIL]);
@@ -229,16 +238,16 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 		return;
 	}
 
-	event.def_event.sample_count = fls_def_sensor_sample_count;
+	event->def_event.sample_count = fls_def_sensor_sample_count;
 	for (i = 0; i < FLS_DEF_SENSOR_WINDOWS; i++) {
-		event.def_event.window_length[i] = fls_def_sensor_window_sz[i];
+		event->def_event.window_length[i] = fls_def_sensor_window_sz[i];
 	}
 
 	for (i = 0; i < fls_def_sensor_sample_count; i++) {
 		uint32_t j;
 
 		for (j = 0; j < FLS_DEF_SENSOR_WINDOWS; j++) {
-			fls_def_sensor_window_to_event_window(&orig->stats.isd.samples[i].window[j], &reverse->stats.isd.samples[i].window[j], &event.def_event.samples[i].window[j]);
+			fls_def_sensor_window_to_event_window(&orig->stats.isd.samples[i].window[j], &reverse->stats.isd.samples[i].window[j], &event->def_event.samples[i].window[j]);
 			orig->stats.isd.samples[i].window[j].open = true;
 			reverse->stats.isd.samples[i].window[j].open = true;
 		}
@@ -246,7 +255,7 @@ static void fls_def_sensor_event_create(struct fls_conn *conn, ktime_t time, enu
 		reverse->stats.isd.samples[i].last_packet_time = 0;
 	}
 
-	if (!fls_rfs_enqueue(&event)) {
+	if (!fls_rfs_enqueue(event)) {
 		FLS_WARN("Event dropped!\n");
 		atomic_inc(&orig->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_DEF_FAIL]);
 		atomic_inc(&reverse->fls_conn_exception_counters[FLS_CONN_EXCEPTION_RFS_ENQUEUE_DEF_FAIL]);
