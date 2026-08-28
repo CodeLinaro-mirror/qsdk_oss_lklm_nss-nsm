@@ -299,8 +299,13 @@ int fls_flow_fill_udp_clf_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tu
  * fls_flow_fill_tm_flow
  *	Fill one flow message to be sent to FLS CMN via character device
  */
-void fls_flow_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, const struct nf_conntrack_l4proto *l4proto, struct nf_conn_acct *ct_acct, struct fls_flow_tm *tm_flow)
+int fls_flow_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple, const struct nf_conntrack_l4proto *l4proto, struct nf_conn_acct *ct_acct, struct fls_flow_tm *tm_flow)
 {
+	if (!ct || !tuple || !l4proto) {
+		FLS_WARN("Invalid parameters passed to fls_flow_fill_tm_flow");
+		return 0;
+	}
+
 	switch (tuple->src.l3num) {
 	case NFPROTO_IPV4:
 		tm_flow->src_ip_addr[0] = tuple->src.u3.ip;
@@ -364,6 +369,8 @@ void fls_flow_fill_tm_flow(struct nf_conn *ct, struct nf_conntrack_tuple *tuple,
 	tm_flow->proto = l4proto->l4proto;
 	tm_flow->flags = 0;
 	fls_flow_print_tm_flow(tm_flow);
+
+	return 1;
 }
 
 /*
@@ -397,7 +404,7 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 		lockp = &nf_conntrack_locks[i % CONNTRACK_LOCKS];
 		spin_lock_bh(lockp);
 
-		hlist_nulls_for_each_entry(h, n, &nf_conntrack_hash[i], hnnode) {
+		hlist_nulls_for_each_entry_safe(h, n, &nf_conntrack_hash[i], hnnode) {
 			ct = nf_ct_tuplehash_to_ctrack(h);
 			if (unlikely(!ct)) {
 				FLS_WARN("Unable to get nf_conn\n");
@@ -457,29 +464,60 @@ void fls_flow_push_stats_req_work(struct work_struct *work)
 				continue;
 			}
 
+			/*
+			 * Release the conntrack bucket lock before calling the fill
+			 * functions below. fls_flow_fill_tm_flow() can reach
+			 * fls_flow_get_macaddr_ipv4()/_ipv6(), which call
+			 * ip_route_output()/dst_neigh_lookup() and, on a neighbour-cache
+			 * miss, __neigh_create() -- which takes the ARP/ND table's
+			 * write_lock_bh(&tbl->lock). Calling into that path while holding
+			 * the conntrack bucket lock imposes a lock-nesting order
+			 * (conntrack bucket lock -> neighbour table lock) that the
+			 * conntrack subsystem's own walkers never take and that this
+			 * code does not need. The reference held via
+			 * refcount_inc_not_zero() above keeps 'ct' (and the tuple/l4proto/
+			 * ct_acct derived from it) valid while the lock is dropped.
+			 *
+			 * The hlist_nulls iterator advances via the current entry's
+			 * next pointer once the loop body completes; entries added to or
+			 * removed from this bucket while the lock is released may be
+			 * missed or re-seen on this pass, which is acceptable for
+			 * periodic stats collection.
+			 */
+			spin_unlock_bh(lockp);
+
 			if (!udp_clf_enabled) {
-				fls_flow_fill_tm_flow(ct, tuple, l4proto, ct_acct, &tm_flow);
+				if (!fls_flow_fill_tm_flow(ct, tuple, l4proto, ct_acct, &tm_flow)) {
+					FLS_WARN("Unable to get connection info:%p \n", ct);
+					nf_ct_put(ct);
+					spin_lock_bh(lockp);
+					continue;
+				}
 
 				if (!fls_chardev_enqueue(&tm_flow)) {
 					FLS_INFO("FTM_MSG Dropped");
 					nf_ct_put(ct);
+					spin_lock_bh(lockp);
 					continue;
 				}
 			} else {
 				if (!fls_flow_fill_udp_clf_flow(ct, tuple, l4proto, ct_acct, &udp_clf_flow)) {
 					FLS_WARN("Unable to get connection info:%p \n", ct);
 					nf_ct_put(ct);
+					spin_lock_bh(lockp);
 					continue;
 				}
 
 				if (!fls_chardev_enqueue(&udp_clf_flow)) {
 					FLS_INFO("FLS UDP_CLF MSG Dropped");
 					nf_ct_put(ct);
+					spin_lock_bh(lockp);
 					continue;
 				}
 			}
 
 			nf_ct_put(ct);
+			spin_lock_bh(lockp);
 		}
 		spin_unlock_bh(lockp);
 	}
