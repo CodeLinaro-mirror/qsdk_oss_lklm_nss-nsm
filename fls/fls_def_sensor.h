@@ -11,10 +11,10 @@
 #include <linux/spinlock.h>
 #include "fls_sensor_manager.h"
 
-#define FLS_DEF_SENSOR_MAX_SAMPLE_COUNT 5
-#define FLS_DEF_SENSOR_WINDOWS 3
-#define FLS_DEF_SENSOR_WINDOW_LG (FLS_DEF_SENSOR_WINDOWS - 1)
-#define FLS_DEF_SENSOR_TOTAL_TIME (fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOW_LG] * fls_def_sensor_sample_count)
+#define FLS_CONFIG_MAX_SAMPLE_COUNT 5
+#define FLS_CONFIG_WINDOWS 3
+#define FLS_DEF_SENSOR_WINDOW_LG (FLS_CONFIG_WINDOWS - 1)
+#define FLS_DEF_SENSOR_TOTAL_TIME (fls_config_window_sz[FLS_DEF_SENSOR_WINDOW_LG] * fls_config_sample_count)
 #define FLS_DEF_SENSOR_WINDOW_FLAG_SM 0x01
 #define FLS_DEF_SENSOR_WINDOW_FLAG_MD 0x02
 #define FLS_DEF_SENSOR_WINDOW_FLAG_LG 0x04
@@ -25,25 +25,25 @@
 #define FLS_DEF_SENSOR_WINDOW_MIN FLS_DEF_SENSOR_WINDOW_LG - 1
 #endif
 
-extern uint32_t fls_def_sensor_window_sz[FLS_DEF_SENSOR_WINDOWS];
-extern uint32_t fls_def_sensor_delay;
-extern int32_t fls_def_sensor_max_events;
-extern uint32_t fls_def_sensor_sample_count;
-extern uint32_t fls_def_sensor_bytes;
-extern uint32_t fls_def_sensor_ipat;
-extern uint32_t fls_def_sensor_stop_forever;
-extern uint32_t fls_def_sensor_pkts_hwm;
-extern uint32_t fls_def_sensor_bytes_hwm;
-extern uint32_t fls_def_sensor_burst;
-extern uint32_t fls_def_sensor_burst_threshold[FLS_DEF_SENSOR_WINDOWS];
-extern uint32_t fls_def_sensor_burst_short_intvl[FLS_DEF_SENSOR_WINDOWS];
-extern uint32_t fls_def_sensor_burst_long_intvl[FLS_DEF_SENSOR_WINDOWS];
-extern uint32_t fls_def_sensor_xxl_sz_threshold;
-extern uint32_t fls_def_sensor_xxl_short;
-extern uint32_t fls_def_sensor_xxl_long;
-extern uint32_t fls_def_sensor_xxl_window;
-extern uint32_t fls_def_sensor_xl_window;
-extern uint32_t fls_def_sensor_sample_freq;
+extern uint32_t fls_config_window_sz[FLS_CONFIG_WINDOWS];
+extern uint32_t fls_config_delay;
+extern int32_t fls_config_max_events;
+extern uint32_t fls_config_sample_count;
+extern uint32_t fls_config_bytes;
+extern uint32_t fls_config_ipat;
+extern uint32_t fls_config_stop_forever;
+extern uint32_t fls_config_pkts_hwm;
+extern uint32_t fls_config_bytes_hwm;
+extern uint32_t fls_config_burst;
+extern uint32_t fls_config_burst_threshold[FLS_CONFIG_WINDOWS];
+extern uint32_t fls_config_burst_short_intvl[FLS_CONFIG_WINDOWS];
+extern uint32_t fls_config_burst_long_intvl[FLS_CONFIG_WINDOWS];
+extern uint32_t fls_config_xxl_sz_threshold;
+extern uint32_t fls_config_xxl_short;
+extern uint32_t fls_config_xxl_long;
+extern uint32_t fls_config_xxl_window;
+extern uint32_t fls_config_xl_window;
+extern uint32_t fls_config_sample_freq;
 
 struct fls_def_sensor_burst {
 	bool active;
@@ -74,7 +74,7 @@ struct fls_def_sensor_window {
 struct fls_def_sensor_sample {
 	ktime_t last_packet_time;
 	ktime_t sample_start_time;
-	struct fls_def_sensor_window window[FLS_DEF_SENSOR_WINDOWS];
+	struct fls_def_sensor_window window[FLS_CONFIG_WINDOWS];
 };
 
 struct fls_def_sensor_timer_data {
@@ -90,7 +90,7 @@ struct fls_def_sensor_timers {
 };
 
 struct fls_def_sensor_data {
-	struct fls_def_sensor_sample samples[FLS_DEF_SENSOR_MAX_SAMPLE_COUNT];
+	struct fls_def_sensor_sample samples[FLS_CONFIG_MAX_SAMPLE_COUNT];
 	ktime_t first_packet_time;
 	ktime_t event_start_time;
 	struct fls_def_sensor_sample xxl_sample;
