@@ -23,10 +23,10 @@ int udp_clf_enabled;
 
 static int fls_init_udp_clf(void)
 {
-	fls_debug_init();
+	fls_config_init();
 
 	if (!fls_flow_init()) {
-		fls_debug_deinit();
+		fls_config_deinit();
 		return -1;
 	}
 	return 0;
@@ -55,10 +55,10 @@ static int fls_init_default(void)
 
 	sfe_fls_register(fls_conn_create, fls_conn_delete, fls_conn_stats_update);
 
-	fls_debug_init();
+	fls_config_init();
 
 	if (!fls_flow_init()) {
-		fls_debug_deinit();
+		fls_config_deinit();
 		sfe_fls_unregister();
 		fls_rfs_shutdown();
 		return -1;
@@ -70,7 +70,7 @@ static int fls_init_default(void)
 void __exit fls_exit(void)
 {
 	fls_flow_deinit();
-	fls_debug_deinit();
+	fls_config_deinit();
 
 	FLS_TRACE("udp_clf_enabled = %d\n", udp_clf_enabled);
 	if (!udp_clf_enabled) {

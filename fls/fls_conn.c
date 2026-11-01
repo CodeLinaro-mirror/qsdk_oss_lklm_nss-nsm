@@ -148,6 +148,7 @@ struct fls_conn *fls_conn_create_flow(uint8_t ip_version,
 	connection->dest_port = dest_port;
 	connection->hash = hash;
 	connection->flags = SFE_FLS_CONNECTION_FLAG_DEF_ENABLE;
+	connection->ae_mode = FLS_CONN_AE_MODE_SFE;
 	connection->traffic_class = 0xFF;
 
 	connection->all_next = fct.all_connections_head;
@@ -242,6 +243,92 @@ struct fls_conn *fls_conn_lookup(uint8_t ip_version,
 EXPORT_SYMBOL(fls_conn_lookup);
 
 /*
+ * fls_conn_destroy_timers()
+ *	Delete and free all timer related data from fls_conn_cmn
+ */
+static void fls_conn_destroy_timers(struct fls_conn_cmn *cmn)
+{
+	if (!cmn->timers) {
+		return;
+	}
+
+	if (cmn->timers->delay_timer) {
+		if (cmn->timers->delay_timer->timer.function) {
+			hrtimer_cancel(&cmn->timers->delay_timer->timer);
+		}
+		kfree(cmn->timers->delay_timer);
+	}
+
+	if (cmn->timers->window_timer) {
+		if (cmn->timers->window_timer->timer.function) {
+			hrtimer_cancel(&cmn->timers->window_timer->timer);
+		}
+		kfree(cmn->timers->window_timer);
+	}
+
+	if (cmn->timers->xl_xxl_timer) {
+		if (cmn->timers->xl_xxl_timer->timer.function) {
+			hrtimer_cancel(&cmn->timers->xl_xxl_timer->timer);
+		}
+		kfree(cmn->timers->xl_xxl_timer);
+	}
+
+	kfree(cmn->timers);
+}
+
+/*
+ * fls_conn_init_timers()
+ *	Dynamically allocates timers for each connection and initializes them.
+ */
+static bool fls_conn_init_timers(struct fls_conn_cmn *cmn)
+{
+	cmn->timers = kmalloc(sizeof(struct fls_def_sensor_timers), GFP_ATOMIC);
+	if (!cmn->timers) {
+		FLS_WARN("failed to alloc timers struct\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
+		return false;
+	}
+
+	cmn->timers->delay_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
+	if (!cmn->timers->delay_timer) {
+		FLS_WARN("failed to alloc delay timer struct\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
+		goto timers_free;
+	}
+	cmn->timers->delay_timer->cmn = cmn;
+	cmn->timers->delay_timer->timer.function = NULL;
+
+	cmn->timers->window_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
+	if (!cmn->timers->window_timer) {
+		FLS_WARN("failed to alloc window timer struct\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
+		goto delay_timer_free;
+	}
+	cmn->timers->window_timer->cmn = cmn;
+	cmn->timers->window_timer->timer.function = NULL;
+
+	cmn->timers->xl_xxl_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
+	if (!cmn->timers->xl_xxl_timer) {
+		FLS_WARN("failed to alloc xl timer struct\n");
+		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
+		goto window_timer_free;
+	}
+	cmn->timers->xl_xxl_timer->cmn = cmn;
+	cmn->timers->xl_xxl_timer->timer.function = NULL;
+
+	return true;
+
+window_timer_free:
+	kfree(cmn->timers->window_timer);
+delay_timer_free:
+	kfree(cmn->timers->delay_timer);
+timers_free:
+	kfree(cmn->timers);
+	cmn->timers = NULL;
+	return false;
+}
+
+/*
  * fls_conn_free_cmn()
  *	Free all dynamically allocated resources in fls_conn_cmn :
  *	release timers, clear back-references, and free the common struct.
@@ -255,30 +342,15 @@ static void fls_conn_free_cmn(struct fls_conn_cmn *cmn)
 	/*
 	 * Ensure timers are deleted before freeing memory
 	 */
-	if (cmn->timers) {
-		if (cmn->timers->delay_timer && cmn->timers->delay_timer->timer.function) {
-			hrtimer_cancel(&cmn->timers->delay_timer->timer);
-			kfree(cmn->timers->delay_timer);
-		}
-
-		if (cmn->timers->window_timer && cmn->timers->window_timer->timer.function) {
-			hrtimer_cancel(&cmn->timers->window_timer->timer);
-			kfree(cmn->timers->window_timer);
-		}
-
-		if (cmn->timers->xl_xxl_timer && cmn->timers->xl_xxl_timer->timer.function) {
-			hrtimer_cancel(&cmn->timers->xl_xxl_timer->timer);
-			kfree(cmn->timers->xl_xxl_timer);
-		}
-
-		kfree(cmn->timers);
+	if (cmn->orig && cmn->orig->ae_mode == FLS_CONN_AE_MODE_SFE) {
+		fls_conn_destroy_timers(cmn);
 	}
 
-	if(cmn->orig) {
+	if (cmn->orig) {
 		cmn->orig->cmn = NULL;
 	}
 
-	if(cmn->reply) {
+	if (cmn->reply) {
 		cmn->reply->cmn = NULL;
 	}
 
@@ -306,7 +378,9 @@ static void fls_conn_delete_internal(void *conn)
 	fls_debug_print_conn_info(conn);
 
 	if (connection->cmn) {
-		fls_def_sensor_timer_delete(connection);
+		if (connection->ae_mode == FLS_CONN_AE_MODE_SFE) {
+			fls_def_sensor_timer_delete(connection);
+		}
 		fls_conn_free_cmn(connection->cmn);
 	}
 
@@ -430,8 +504,10 @@ bool fls_conn_delete_timeout(ktime_t now, s64 threshold) {
 }
 
 /*
- * fls_conn_alloc_cmn
- *	Dynamically allocates timers for each connection
+ * fls_conn_alloc_cmn()
+ *	Allocates the common structure shared by both directions of a connection
+ *
+ * The timers and the orig/reply flow pointers are left NULL; they are set up later.
  */
 struct fls_conn_cmn *fls_conn_alloc_cmn(void)
 {
@@ -444,51 +520,11 @@ struct fls_conn_cmn *fls_conn_alloc_cmn(void)
 		return NULL;
 	}
 
-	cmn->timers = kmalloc(sizeof(struct fls_def_sensor_timers), GFP_ATOMIC);
-	if (!cmn->timers) {
-		FLS_WARN("failed to alloc timers struct\n");
-		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
-		goto cmn_free;
-	}
-
-	cmn->timers->delay_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
-	if (!cmn->timers->delay_timer) {
-		FLS_WARN("failed to alloc delay timer struct\n");
-		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
-		goto timers_free;
-	}
-	cmn->timers->delay_timer->cmn = cmn;
-	cmn->timers->delay_timer->timer.function = NULL;
-
-	cmn->timers->window_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
-	if (!cmn->timers->window_timer) {
-		FLS_WARN("failed to alloc window timer struct\n");
-		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
-		goto delay_timer_free;
-	}
-	cmn->timers->window_timer->cmn = cmn;
-	cmn->timers->window_timer->timer.function = NULL;
-
-	cmn->timers->xl_xxl_timer = kmalloc(sizeof(struct fls_def_sensor_timer_data), GFP_ATOMIC);
-	if (!cmn->timers->xl_xxl_timer) {
-		FLS_WARN("failed to alloc xl timer struct\n");
-		atomic_inc(&fct.fls_gbl_exception_counters[FLS_GBL_EXCEPTION_MEM_ALLOC_FAIL]);
-		goto window_timer_free;
-	}
-	cmn->timers->xl_xxl_timer->cmn = cmn;
-	cmn->timers->xl_xxl_timer->timer.function = NULL;
+	cmn->timers = NULL;
+	cmn->orig = NULL;
+	cmn->reply = NULL;
 
 	return cmn;
-
-window_timer_free:
-	kfree(cmn->timers->window_timer);
-delay_timer_free:
-	kfree(cmn->timers->delay_timer);
-timers_free:
-	kfree(cmn->timers);
-cmn_free:
-	kfree(cmn);
-	return NULL;
 }
 
 /*
@@ -524,10 +560,12 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 		if (fls_conn_delete_timeout(last_ts, fls_conn_timeout)) {
 			orig = fls_conn_create_flow(ip_version, protocol, orig_src_ip, orig_src_port, orig_dest_ip, orig_dest_port);
 			if (!orig) {
+				FLS_ERROR("Failed to create orig flow after timeout cleanup\n");
 				fls_conn_free_cmn(cmn);
 				return NULL;
 			}
 		} else {
+			FLS_ERROR("Failed to create orig flow: no timeout connections to clean\n");
 			fls_conn_free_cmn(cmn);
 			return NULL;
 		}
@@ -586,7 +624,23 @@ struct fls_conn *fls_conn_create_bidiflow(uint8_t ip_version,
 	/*
 	 * Initialize event timers for common data
 	 */
-	fls_def_sensor_timer_init(cmn->timers);
+	if (orig->ae_mode == FLS_CONN_AE_MODE_SFE) {
+		if (!fls_conn_init_timers(cmn)) {
+			/*
+			 * cmn is shared between orig and reply; the first
+			 * fls_conn_delete_internal() call below already frees
+			 * it (via fls_conn_free_cmn()) since both orig->cmn and
+			 * reply->cmn point at it. Do not free cmn again here.
+			 */
+			spin_lock_bh(&fct.lock);
+			fls_conn_delete_internal(reply);
+			fls_conn_delete_internal(orig);
+			spin_unlock_bh(&fct.lock);
+			return NULL;
+		}
+
+		fls_def_sensor_timer_init(cmn->timers);
+	}
 
 	return orig;
 }

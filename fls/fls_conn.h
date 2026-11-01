@@ -15,6 +15,9 @@
 #include "fls_sensor_manager.h"
 #include "fls_def_sensor.h"
 
+#define FLS_CONN_AE_MODE_SFE 0
+#define FLS_CONN_AE_MODE_PPE 1
+
 #define FLS_CONN_HASH_SHIFT 12
 #define FLS_CONN_HASH_SIZE (1 << FLS_CONN_HASH_SHIFT)
 #define FLS_CONN_HASH_MASK (FLS_CONN_HASH_SIZE - 1)
@@ -48,6 +51,7 @@ struct fls_conn {
 	uint8_t dir;
 	uint8_t ip_version;
 	uint8_t protocol;
+	uint8_t ae_mode;
 	uint8_t traffic_class;
 	uint32_t src_ip[4];
 	uint16_t src_port;
